@@ -112,9 +112,21 @@ def get_scrape_provider(name: str, **kwargs: Any) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def cache_key(provider: str, query: str, max_results: int) -> str:
-    """Compute a deterministic cache key for a search call."""
-    raw = f"{provider}|{query}|{max_results}"
+def cache_key(provider: str, query: str, max_results: int, **params: Any) -> str:
+    """Compute a deterministic cache key for a search call.
+
+    `params` is a free-form dict of result-affecting inputs (category, sort
+    order, language filter, etc.). Including every input in the hash
+    prevents two logically distinct searches from sharing a cache entry.
+    Keys are stable across runs because params are sorted before hashing.
+    """
+    parts = [f"provider={provider}", f"query={query}", f"max_results={max_results}"]
+    for k in sorted(params):
+        v = params[k]
+        if v is None or v == "":
+            continue
+        parts.append(f"{k}={v}")
+    raw = "|".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
@@ -123,9 +135,14 @@ def cache_path_for(cache_dir: Path, provider: str, key: str) -> Path:
     return cache_dir / provider / f"{key}.json"
 
 
-def load_cache(cache_dir: Path, provider: str, query: str, max_results: int) -> list[dict] | None:
-    """Return cached results for the given call, or None on miss."""
-    key = cache_key(provider, query, max_results)
+def load_cache(cache_dir: Path, provider: str, query: str, max_results: int, **params: Any) -> list[dict] | None:
+    """Return cached results for the given call, or None on miss.
+
+    `params` mirrors cache_key: any result-affecting input that should be
+    part of the key (category, sort_by, language, etc.) must be passed
+    through here so the lookup matches.
+    """
+    key = cache_key(provider, query, max_results, **params)
     path = cache_path_for(cache_dir, provider, key)
     if not path.exists():
         return None
@@ -139,15 +156,25 @@ def load_cache(cache_dir: Path, provider: str, query: str, max_results: int) -> 
         return None
 
 
-def save_cache(cache_dir: Path, provider: str, query: str, max_results: int, results: list[dict]) -> None:
-    """Persist search results to the cache."""
-    key = cache_key(provider, query, max_results)
+def save_cache(
+    cache_dir: Path, provider: str, query: str, max_results: int, results: list[dict], **params: Any
+) -> None:
+    """Persist search results to the cache.
+
+    Cache writes happen on every successful live call (regardless of whether
+    `--use-cache` was passed). `--use-cache` controls whether a cache hit
+    is *required* (and a miss is an error), not whether cache writes
+    occur. This matches the contract in requirements.md section 10.2:
+    "first run caches, subsequent runs use cache".
+    """
+    key = cache_key(provider, query, max_results, **params)
     path = cache_path_for(cache_dir, provider, key)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "provider": provider,
         "query": query,
         "max_results": max_results,
+        "params": {k: v for k, v in params.items() if v is not None and v != ""},
         "timestamp": utcnow_iso(),
         "result_count": len(results),
         "results": results,
@@ -269,6 +296,18 @@ def run_search(
         raw_results = load_cache(cache_dir, search_provider_name, query, max_results)
         if raw_results is not None:
             log.info("using cached results: %d items", len(raw_results))
+        else:
+            # Reproducible mode: a cache miss must fail loudly rather than
+            # silently falling back to a live network call. This matches
+            # the contract in requirements.md section 10.2: cache hits are
+            # used, cache misses during a reproducible run are errors.
+            emit_error(
+                "cache_miss",
+                f"no cached result for provider={search_provider_name!r} "
+                f"query={query!r} max_results={max_results}. "
+                "Refusing to call the network in --use-cache mode; "
+                "re-run without --use-cache to populate the cache.",
+            )
 
     if raw_results is None:
         try:
@@ -292,8 +331,10 @@ def run_search(
             }
             for r in search_results
         ]
-        if use_cache:
-            save_cache(cache_dir, search_provider_name, query, max_results, raw_results)
+        # Always write the cache after a successful live call so subsequent
+        # --use-cache runs can replay it. This decouples cache writes from
+        # the --use-cache flag, which now means "require cache hit".
+        save_cache(cache_dir, search_provider_name, query, max_results, raw_results)
 
     # Deduplicate
     seen = existing_url_set(index)

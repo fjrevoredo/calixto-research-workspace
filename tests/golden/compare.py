@@ -195,8 +195,23 @@ def load_expected(expected_dir: Path) -> dict:
     return out
 
 
-def check_against_expected(metrics: dict, expected: dict) -> list[dict]:
-    """Check metrics against expected structural assertions. Returns list of failures."""
+def check_against_expected(metrics: dict, expected: dict) -> tuple[list[dict], list[dict]]:
+    """Check metrics against expected structural assertions.
+
+    Returns (failures, warnings). The two are distinct:
+    - failures are structural breaks that always count (missing required
+      IDs, no source diversity, etc.)
+    - warnings are soft quality signals (citation coverage below the
+      required 80%, etc.) that only count under --strict.
+
+    The 80% citation coverage requirement from requirements.md section
+    10.4 is reported as a warning (not a failure) so that source-only
+    runs (where the agent has not yet synthesized a report) do not
+    falsely fail comparison. A run that synthesizes a real report and
+    cites fewer than 80% of its sources will surface as a warning;
+    `--strict` then promotes that warning to a non-zero exit so the
+    no-silent-failures principle still holds.
+    """
     failures: list[dict] = []
     warnings: list[dict] = []
 
@@ -276,7 +291,7 @@ def check_against_expected(metrics: dict, expected: dict) -> list[dict]:
                 }
             )
 
-    return failures
+    return failures, warnings
 
 
 def build_diff(a: dict, b: dict) -> list[dict]:
@@ -312,18 +327,29 @@ def main(argv: list[str] | None = None) -> int:
     metrics_b = analyze_run(run_b_path)
 
     expected = load_expected(Path(args.expected).resolve())
-    failures_a = check_against_expected(metrics_a, expected)
-    failures_b = check_against_expected(metrics_b, expected)
+    failures_a, warnings_a = check_against_expected(metrics_a, expected)
+    failures_b, warnings_b = check_against_expected(metrics_b, expected)
     diff = build_diff(metrics_a, metrics_b)
 
     all_failures = [
         {"run": "A", "failures": failures_a},
         {"run": "B", "failures": failures_b},
     ]
+    all_warnings = [
+        {"run": "A", "warnings": warnings_a},
+        {"run": "B", "warnings": warnings_b},
+    ]
 
-    overall_status = "ok" if not failures_a and not failures_b else "error"
-    if args.strict and (failures_a or failures_b):
+    # Exit code logic:
+    # - any failure: error
+    # - any warning AND --strict: error
+    # - otherwise: ok
+    has_failure = bool(failures_a or failures_b)
+    has_warning = bool(warnings_a or warnings_b)
+    if has_failure or (args.strict and has_warning):
         overall_status = "error"
+    else:
+        overall_status = "ok"
 
     emit_ok(
         {
@@ -332,7 +358,9 @@ def main(argv: list[str] | None = None) -> int:
             "run_b": metrics_b,
             "diff": diff,
             "failures": all_failures,
+            "warnings": all_warnings,
             "expected": expected,
+            "strict": bool(args.strict),
         }
     )
     if overall_status == "error":

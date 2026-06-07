@@ -178,7 +178,9 @@ fresh_install() {
             url="${url%:*}"
             local ref="${src##*:}"
             run git clone --depth 1 --branch "$ref" "$url" "$TARGET_DIR/.calixto-tmp"
-            run mv "$TARGET_DIR/.calixto-tmp" "$TARGET_DIR/.calixto-stage"
+            # Move the cloned contents (including dotfiles) up to TARGET_DIR
+            run sh -c "shopt -s dotglob && mv $TARGET_DIR/.calixto-tmp/* $TARGET_DIR/ 2>/dev/null || true"
+            run sh -c "shopt -s dotglob && mv $TARGET_DIR/.calixto-tmp/.[!.]* $TARGET_DIR/ 2>/dev/null || true"
             ;;
         tarball:*)
             local url="${src#tarball:}"
@@ -186,14 +188,32 @@ fresh_install() {
             run tar -xzf "$TARGET_DIR/.calixto.tar.gz" -C "$TARGET_DIR"
             # Tarballs extract into <repo>-<ref> directory; move contents up
             run sh -c "shopt -s dotglob && mv $TARGET_DIR/calixto-*/* $TARGET_DIR/ 2>/dev/null || true"
+            run sh -c "shopt -s dotglob && mv $TARGET_DIR/calixto-*/.[!.]* $TARGET_DIR/ 2>/dev/null || true"
             run rm -rf "$TARGET_DIR/calixto-"*
             run rm -f "$TARGET_DIR/.calixto.tar.gz"
             ;;
     esac
 
     if [ "$DRY_RUN" -eq 0 ]; then
-        # Cleanup the staging dir if we used git
-        [ -d "$TARGET_DIR/.calixto-stage" ] && rm -rf "$TARGET_DIR/.calixto-stage"
+        # Verify the install actually populated the target before cleaning up.
+        # If required workspace markers are missing, fail and preserve the
+        # staging directory so the user can inspect it.
+        local missing=()
+        local marker
+        for marker in "${WORKSPACE_MARKERS[@]}"; do
+            if [ ! -e "$TARGET_DIR/$marker" ]; then
+                missing+=("$marker")
+            fi
+        done
+        if [ ${#missing[@]} -gt 0 ]; then
+            warn "Fresh install appears incomplete. Missing markers: ${missing[*]}"
+            warn "Staging preserved at $TARGET_DIR/.calixto-tmp for inspection."
+            fail "Fresh install did not produce a valid Calixto workspace."
+        fi
+        # All markers present: clean up staging and any leftover tarball
+        [ -d "$TARGET_DIR/.calixto-tmp" ] && rm -rf "$TARGET_DIR/.calixto-tmp"
+        [ -d "$TARGET_DIR/calixto-"* ] && rm -rf "$TARGET_DIR/calixto-"*
+        [ -f "$TARGET_DIR/.calixto.tar.gz" ] && rm -f "$TARGET_DIR/.calixto.tar.gz"
     fi
 
     if [ "$SKIP_DEPS" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then

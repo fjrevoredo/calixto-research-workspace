@@ -76,6 +76,71 @@ def _resolve_workspace(name_or_path: str, default_parent: Path) -> Path:
     return (default_parent / name_or_path).resolve()
 
 
+def _resolve_workspace_for_delete(name_or_path: str, default_parent: Path) -> Path:
+    """Resolve a workspace target for deletion, with strict safety checks.
+
+    The resolved path MUST:
+    - Exist on disk
+    - Contain a config.json marker
+    - Be strictly inside the resolved default_parent (no traversal)
+    - Not equal default_parent or any filesystem root
+
+    These checks happen immediately before any destructive operation, so a
+    misuse like `delete ..` cannot escape the workspaces parent directory.
+    """
+    parent = default_parent.resolve()
+    if not parent.exists() or not parent.is_dir():
+        emit_error("parent_not_found", f"workspace parent directory does not exist: {parent}")
+
+    # Reject filesystem roots early; nothing under "/" is a workspace.
+    parent_str = str(parent)
+    if parent_str == "/" or (len(parent_str) >= 3 and parent_str[1] == ":" and parent_str.endswith("\\")):
+        emit_error("invalid_parent", f"refusing to operate on filesystem root: {parent}")
+
+    # Treat the argument strictly as a name; reject absolute paths and path
+    # traversal segments. Slug-only inputs are the documented contract.
+    if Path(name_or_path).is_absolute():
+        emit_error(
+            "invalid_target",
+            f"delete target must be a workspace slug, not an absolute path: {name_or_path!r}",
+        )
+    if not is_valid_slug(name_or_path):
+        emit_error(
+            "invalid_target",
+            f"delete target must be a valid workspace slug: {name_or_path!r}. "
+            "Use lowercase letters, digits, and hyphens; 2-64 chars; start/end with a letter or digit.",
+        )
+
+    target = (parent / name_or_path).resolve()
+
+    # Strict containment: target must be a child of parent, never parent itself.
+    try:
+        target.relative_to(parent)
+    except ValueError:
+        emit_error(
+            "invalid_target",
+            f"delete target {target} is not inside the workspace parent {parent}",
+        )
+
+    if target == parent:
+        emit_error(
+            "invalid_target",
+            f"refusing to delete the workspace parent directory: {parent}",
+        )
+
+    if not target.exists() or not target.is_dir():
+        emit_error("workspace_not_found", f"workspace not found at {target}")
+
+    if not (target / "config.json").is_file():
+        emit_error(
+            "not_a_workspace",
+            f"target {target} is not a Calixto workspace (missing config.json). "
+            "Refusing to delete a non-workspace directory.",
+        )
+
+    return target
+
+
 # ---------------------------------------------------------------------------
 # list
 # ---------------------------------------------------------------------------
@@ -182,10 +247,13 @@ def cmd_show(workspace: Path) -> dict:
 
 
 def cmd_delete(workspace: Path, force: bool) -> dict:
-    """Delete a workspace. Requires --force or interactive confirmation."""
-    if not workspace.exists():
-        emit_error("workspace_not_found", f"workspace not found at {workspace}")
+    """Delete a workspace. Requires --force or interactive confirmation.
 
+    The caller is responsible for resolving `workspace` through
+    `_resolve_workspace_for_delete`, which enforces that the target is a
+    verified workspace inside the configured parent. This function only handles
+    the confirmation prompt and the actual removal.
+    """
     if not force:
         try:
             answer = input(f"Delete workspace at {workspace}? This cannot be undone. (y/n) ")
@@ -193,6 +261,15 @@ def cmd_delete(workspace: Path, force: bool) -> dict:
             emit_error("confirmation_required", "deletion requires --force flag in non-interactive mode")
         if answer.strip().lower() not in ("y", "yes"):
             emit_error("cancelled", "deletion cancelled by user")
+
+    # Final belt-and-suspenders: the target must still look like a workspace
+    # at the moment of removal. This guards against races where the directory
+    # was replaced or the marker was deleted between resolution and removal.
+    if not (workspace / "config.json").is_file():
+        emit_error(
+            "not_a_workspace",
+            f"target {workspace} no longer contains a config.json. Aborting delete.",
+        )
 
     try:
         shutil.rmtree(workspace)
@@ -373,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
         emit_ok(result)
     elif args.command == "delete":
         parent = workspace_path(args.path)
-        workspace = _resolve_workspace(args.name, parent)
+        workspace = _resolve_workspace_for_delete(args.name, parent)
         result = cmd_delete(workspace, force=args.force)
         emit_ok(result)
     elif args.command == "audit":

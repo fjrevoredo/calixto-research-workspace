@@ -1,8 +1,8 @@
 {
   "min_unique_domains": 3,
-  "min_citation_coverage": 0.0,
+  "min_citation_coverage": 0.8,
   "all_ids_valid": true,
   "no_duplicate_urls": true,
   "id_counter_valid": true,
-  "description": "Quality assertions for the golden run. citation_coverage = sources_cited / sources_collected. all_ids_valid means every src_NNN, fnd_NNN, and ins_NNN referenced anywhere exists in its parent registry. min_citation_coverage is set to 0.0 because the source-collection-only run.py does not synthesize a report; an agent following skills/deep-research.md should produce citation coverage >= 0.7."
+  "description": "Quality assertions for the golden run. citation_coverage = sources_cited / sources_collected. all_ids_valid means every src_NNN, fnd_NNN, and ins_NNN referenced anywhere exists in its parent registry. The 0.8 threshold matches requirements.md section 10.4. Citation coverage is enforced as a WARNING (not a failure) so that source-only runs can be compared structurally; --strict promotes warnings to non-zero exit."
 }

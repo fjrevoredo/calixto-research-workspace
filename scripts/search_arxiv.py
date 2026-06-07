@@ -158,9 +158,21 @@ def run_arxiv_search(
     raw_results: list[dict] | None = None
     cache_provider = f"arxiv"
     if use_cache:
-        raw_results = load_cache(cache_dir, cache_provider, query, max_results)
+        raw_results = load_cache(
+            cache_dir, cache_provider, query, max_results, category=category, sort_by=sort_by
+        )
         if raw_results is not None:
             log.info("using cached arxiv results: %d items", len(raw_results))
+        else:
+            # Reproducible mode: a cache miss must fail loudly rather than
+            # silently falling back to a live network call.
+            emit_error(
+                "cache_miss",
+                f"no cached arxiv result for query={query!r} max_results={max_results} "
+                f"category={category!r} sort_by={sort_by!r}. "
+                "Refusing to call the network in --use-cache mode; "
+                "re-run without --use-cache to populate the cache.",
+            )
 
     if raw_results is None:
         # Build the arxiv Search
@@ -203,7 +215,10 @@ def run_arxiv_search(
             )
 
         if use_cache:
-            save_cache(cache_dir, cache_provider, query, max_results, raw_results)
+            save_cache(
+                cache_dir, cache_provider, query, max_results, raw_results,
+                category=category, sort_by=sort_by,
+            )
 
     # Dedup by arxiv_id
     existing_arxiv_ids = {

@@ -39,6 +39,8 @@ for p in (str(REPO_ROOT), str(SCRIPTS_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 
+from _common import is_valid_slug  # noqa: E402
+
 
 def emit_error(error_type: str, message: str) -> None:
     print(
@@ -95,9 +97,16 @@ def run_golden(
         emit_error("config_empty", "no searches defined in golden config")
 
     # Determine workspace name
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # Use a slug-safe timestamp: lowercase 't' and 'z' are valid in slugs,
+    # whereas ISO-8601's uppercase 'T' and 'Z' would be rejected by is_valid_slug.
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%Sz")
     if not workspace_name:
         workspace_name = f"{config.get('workspace_prefix', 'golden')}-{timestamp}"
+    if not is_valid_slug(workspace_name):
+        emit_error(
+            "invalid_workspace_name",
+            f"generated workspace name is not slug-safe: {workspace_name!r}",
+        )
     workspace_path = REPO_ROOT / "workspaces" / workspace_name
 
     if clear_cache:
@@ -142,8 +151,6 @@ def run_golden(
             ]
             if use_cache:
                 cmd.append("--use-cache")
-            if clear_cache:
-                cmd.append("--clear-cache")
             if category:
                 cmd += ["--category", category]
         else:
@@ -161,8 +168,10 @@ def run_golden(
                 cmd.append("--no-scrape")
             if use_cache:
                 cmd.append("--use-cache")
-            if clear_cache:
-                cmd.append("--clear-cache")
+        # NOTE: --clear-cache is intentionally NOT forwarded per child search.
+        # Cache clearing happens exactly once, before the search loop (above),
+        # so all searches in this run can populate or reuse the cache without
+        # one search wiping the results written by an earlier search.
         print(f"  - {provider}: {query!r}", file=sys.stderr)
         try:
             r = run_command(cmd, cwd=REPO_ROOT)
@@ -195,6 +204,7 @@ def run_golden(
     total_skipped = sum(
         sr.get("result", {}).get("sources_skipped", 0) for sr in search_results
     )
+    failed = [sr for sr in search_results if "error" in sr]
     summary = {
         "timestamp": timestamp,
         "workspace": workspace_name,
@@ -202,7 +212,11 @@ def run_golden(
         "run_archive": str(runs_dir),
         "config": str(config_path),
         "searches_run": len(search_results),
-        "searches_failed": sum(1 for sr in search_results if "error" in sr),
+        "searches_failed": len(failed),
+        "failed_searches": [
+            {"query": sr["query"], "provider": sr["provider"], "error": sr["error"]}
+            for sr in failed
+        ],
         "total_sources_added": total_added,
         "total_sources_skipped": total_skipped,
         "audit": audit_result,
@@ -235,6 +249,29 @@ def main(argv: list[str] | None = None) -> int:
         raise
     except Exception as e:
         emit_error("golden_run_failed", str(e))
+
+    # A child search that failed means the pipeline did not run end-to-end.
+    # The workspace may still be archived (for inspection), but the top-level
+    # status and exit code must reflect the partial failure so automation
+    # can distinguish a complete run from a degraded one.
+    if summary.get("searches_failed", 0) > 0:
+        print(
+            json.dumps(
+                {
+                    "status": "partial",
+                    "summary": summary,
+                    "message": (
+                        f"{summary['searches_failed']} of {summary['searches_run']} "
+                        "searches failed. The partial workspace has been preserved "
+                        "under the run_archive path; rerun after addressing the "
+                        "underlying errors."
+                    ),
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return 2
 
     emit_ok(summary)
     return 0
