@@ -1,0 +1,8 @@
+{
+  "min_unique_domains": 3,
+  "min_citation_coverage": 0.0,
+  "all_ids_valid": true,
+  "no_duplicate_urls": true,
+  "id_counter_valid": true,
+  "description": "Quality assertions for the golden run. citation_coverage = sources_cited / sources_collected. all_ids_valid means every src_NNN, fnd_NNN, and ins_NNN referenced anywhere exists in its parent registry. min_citation_coverage is set to 0.0 because the source-collection-only run.py does not synthesize a report; an agent following skills/deep-research.md should produce citation coverage >= 0.7."
+}

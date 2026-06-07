@@ -1,0 +1,13 @@
+{
+  "required_sections": [
+    "Summary",
+    "Top Models",
+    "Hardware Requirements",
+    "Comparison",
+    "Recommendations",
+    "References"
+  ],
+  "applies_to": "agent_synthesized_report",
+  "description": "Section names that the agent-synthesized final report must contain. The tests/golden/run.py script only collects sources; an agent following skills/deep-research.md is expected to produce a report with these sections. Comparison is case-insensitive and substring-based.",
+  "note": "When running run.py alone (no agent synthesis), these sections will not be present, and the compare tool will report them as missing. This is expected: run.py validates source collection; the agent validates synthesis."
+}

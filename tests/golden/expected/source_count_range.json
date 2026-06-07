@@ -1,0 +1,5 @@
+{
+  "min": 10,
+  "max": 25,
+  "description": "Expected total source count for a successful golden run, after dedup."
+}

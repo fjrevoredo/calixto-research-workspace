@@ -1,0 +1,133 @@
+{
+  "next_id": 11,
+  "sources": [
+    {
+      "id": "src_001",
+      "url": "https://www.reddit.com/r/Python/comments/yqrr94/python_asyncio_the_complete_guide/",
+      "url_normalized": "reddit.com/r/python/comments/yqrr94/python_asyncio_the_complete_guide",
+      "file": "web/src_001.md",
+      "added_at": "2026-06-06T12:28:19Z",
+      "query": "Python asyncio tutorial",
+      "word_count": 76,
+      "title": "Python Asyncio: The Complete Guide - Reddit",
+      "search_provider": "duckduckgo"
+    },
+    {
+      "id": "src_002",
+      "url": "https://realpython.com/async-io-python/",
+      "url_normalized": "realpython.com/async-io-python",
+      "file": "web/src_002.md",
+      "added_at": "2026-06-06T12:28:19Z",
+      "query": "Python asyncio tutorial",
+      "word_count": 63,
+      "title": "Python's asyncio: A Hands-On Walkthrough",
+      "search_provider": "duckduckgo"
+    },
+    {
+      "id": "src_003",
+      "url": "https://docs.python.org/3/howto/a-conceptual-overview-of-asyncio.html",
+      "url_normalized": "docs.python.org/3/howto/a-conceptual-overview-of-asyncio.html",
+      "file": "web/src_003.md",
+      "added_at": "2026-06-06T12:28:19Z",
+      "query": "Python asyncio tutorial",
+      "word_count": 53,
+      "title": "A Conceptual Overview of asyncio — Python 3.14.5 documentation",
+      "search_provider": "duckduckgo"
+    },
+    {
+      "id": "src_004",
+      "url": "https://www.patricksoftwareblog.com/introduction_to_asyncio_in_python.html",
+      "url_normalized": "patricksoftwareblog.com/introduction_to_asyncio_in_python.html",
+      "file": "web/src_004.md",
+      "added_at": "2026-06-06T12:28:19Z",
+      "query": "Python asyncio tutorial",
+      "word_count": 53,
+      "title": "Introduction to asyncio in Python | Patrick's Software Blog",
+      "search_provider": "duckduckgo"
+    },
+    {
+      "id": "src_005",
+      "url": "https://bbc.github.io/cloudfit-public-docs/asyncio/asyncio-part-1.html",
+      "url_normalized": "bbc.github.io/cloudfit-public-docs/asyncio/asyncio-part-1.html",
+      "file": "web/src_005.md",
+      "added_at": "2026-06-06T12:28:19Z",
+      "query": "Python asyncio tutorial",
+      "word_count": 51,
+      "title": "Python Asyncio Part 1 – Basic Concepts and Patterns",
+      "search_provider": "duckduckgo"
+    },
+    {
+      "id": "src_006",
+      "url": "http://arxiv.org/abs/2009.00804v2",
+      "file": "papers/src_006.md",
+      "added_at": "2026-06-06T12:31:11Z",
+      "query": "transformer architecture",
+      "word_count": 170,
+      "title": "Architectural Implications of Graph Neural Networks",
+      "arxiv_id": "2009.00804",
+      "authors": "Zhihui Zhang, Jingwen Leng, Lingxiao Ma, Youshan Miao, Chao Li, Minyi Guo",
+      "date_published": "2020-09-02",
+      "categories": [
+        "cs.AR",
+        "cs.LG",
+        "cs.PF"
+      ],
+      "search_provider": "arxiv"
+    },
+    {
+      "id": "src_007",
+      "url": "http://arxiv.org/abs/2207.13219v4",
+      "file": "papers/src_007.md",
+      "added_at": "2026-06-06T12:31:11Z",
+      "query": "transformer architecture",
+      "word_count": 285,
+      "title": "Dalorex: A Data-Local Program Execution and Architecture for Memory-bound Applications",
+      "arxiv_id": "2207.13219",
+      "authors": "Marcelo Orenes-Vera, Esin Tureci, David Wentzlaff, Margaret Martonosi",
+      "date_published": "2022-07-26",
+      "categories": [
+        "cs.AR",
+        "cs.DC"
+      ],
+      "search_provider": "arxiv"
+    },
+    {
+      "id": "src_008",
+      "url": "http://arxiv.org/abs/2201.00978v1",
+      "file": "papers/src_008.md",
+      "added_at": "2026-06-06T12:31:11Z",
+      "query": "transformer architecture",
+      "word_count": 126,
+      "title": "PyramidTNT: Improved Transformer-in-Transformer Baselines with Pyramid Architecture",
+      "arxiv_id": "2201.00978",
+      "authors": "Kai Han, Jianyuan Guo, Yehui Tang, Yunhe Wang",
+      "date_published": "2022-01-04",
+      "categories": [
+        "cs.CV"
+      ],
+      "search_provider": "arxiv"
+    },
+    {
+      "id": "src_009",
+      "url": "https://elderscrolls.fandom.com/wiki/Calixto_Corrium",
+      "url_normalized": "elderscrolls.fandom.com/wiki/calixto_corrium",
+      "file": "web/src_009.md",
+      "added_at": "2026-06-06T12:34:54Z",
+      "query": "calixto test",
+      "word_count": 135,
+      "title": "Calixto Corrium - Elder Scrolls Wiki - Fandom",
+      "search_provider": "duckduckgo"
+    },
+    {
+      "id": "src_010",
+      "url": "https://en.uesp.net/wiki/Skyrim:Calixto_Corrium",
+      "url_normalized": "en.uesp.net/wiki/skyrim:calixto_corrium",
+      "file": "web/src_010.md",
+      "added_at": "2026-06-06T12:34:54Z",
+      "query": "calixto test",
+      "word_count": 80,
+      "title": "Skyrim:Calixto Corrium - UESP Wiki - The Unofficial Elder Scrolls Pages",
+      "search_provider": "duckduckgo"
+    }
+  ]
+}

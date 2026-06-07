@@ -1,0 +1,71 @@
+{
+  "name": "sample-workspace",
+  "question": "What are the trade-offs of Python's asyncio for I/O-bound workloads compared to threading and multiprocessing?",
+  "scope": {
+    "domains": ["web", "papers", "code"],
+    "max_sources": 50,
+    "search_depth": 2
+  },
+  "providers": {
+    "search": "duckduckgo",
+    "scrape": "crawl4ai",
+    "papers": "arxiv"
+  },
+  "next_source_id": 11,
+  "next_finding_id": 11,
+  "next_insight_id": 5,
+  "searches": [
+    {
+      "query": "Python asyncio tutorial",
+      "provider": "duckduckgo",
+      "scrape_provider": null,
+      "timestamp": "2026-06-06T12:28:19Z",
+      "results_count": 5,
+      "urls_found": [
+        "https://www.reddit.com/r/Python/comments/yqrr94/python_asyncio_the_complete_guide/",
+        "https://realpython.com/async-io-python/",
+        "https://docs.python.org/3/howto/a-conceptual-overview-of-asyncio.html",
+        "https://www.patricksoftwareblog.com/introduction_to_asyncio_in_python.html",
+        "https://bbc.github.io/cloudfit-public-docs/asyncio/asyncio-part-1.html"
+      ],
+      "sources_added": 5,
+      "sources_skipped": 0,
+      "source_ids": [
+        "src_001",
+        "src_002",
+        "src_003",
+        "src_004",
+        "src_005"
+      ]
+    },
+    {
+      "query": "transformer architecture",
+      "provider": "arxiv",
+      "category": null,
+      "timestamp": "2026-06-06T12:31:11Z",
+      "results_count": 3,
+      "sources_added": 3,
+      "sources_skipped": 0,
+      "source_ids": [
+        "src_006",
+        "src_007",
+        "src_008"
+      ]
+    },
+    {
+      "query": "calixto test",
+      "provider": "duckduckgo",
+      "scrape_provider": null,
+      "timestamp": "2026-06-06T12:34:54Z",
+      "results_count": 2,
+      "sources_added": 2,
+      "sources_skipped": 0,
+      "source_ids": [
+        "src_009",
+        "src_010"
+      ]
+    }
+  ],
+  "created_at": "2026-06-06T12:28:17Z",
+  "updated_at": "2026-06-06T12:34:54Z"
+}

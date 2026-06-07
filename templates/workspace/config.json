@@ -1,0 +1,20 @@
+{
+  "name": "example",
+  "question": "",
+  "scope": {
+    "domains": ["web", "papers", "code"],
+    "max_sources": 50,
+    "search_depth": 2
+  },
+  "providers": {
+    "search": "duckduckgo",
+    "scrape": "crawl4ai",
+    "papers": "arxiv"
+  },
+  "next_source_id": 1,
+  "next_finding_id": 1,
+  "next_insight_id": 1,
+  "searches": [],
+  "created_at": "1970-01-01T00:00:00Z",
+  "updated_at": "1970-01-01T00:00:00Z"
+}

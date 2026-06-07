@@ -1,0 +1,38 @@
+{
+  "name": "golden-best-open-source-llms-2025",
+  "description": "Reproducible benchmark: 'What are the best open-source LLMs for local deployment in 2025?'",
+  "rationale": "Tests the full pipeline: web search, paper search, synthesis, citations. The question is broad enough to require multiple searches across angles (top models, hardware requirements, benchmarks, recent releases) but specific enough to be reproducible with structural evaluation.",
+  "created_at": "2026-06-06",
+  "version": "0.1.0",
+  "question": "What are the best open-source LLMs for local deployment in 2025?",
+  "searches": [
+    {
+      "provider": "duckduckgo",
+      "query": "best open source LLM local deployment 2025",
+      "max_results": 5,
+      "do_scrape": false
+    },
+    {
+      "provider": "duckduckgo",
+      "query": "Llama 3 Mistral Qwen local inference benchmark 2025",
+      "max_results": 5,
+      "do_scrape": false
+    },
+    {
+      "provider": "duckduckgo",
+      "query": "running LLM locally hardware VRAM requirements",
+      "max_results": 4,
+      "do_scrape": false
+    },
+    {
+      "provider": "arxiv",
+      "query": "open source large language model evaluation",
+      "max_results": 4,
+      "category": "cs.CL"
+    }
+  ],
+  "expected_min_sources": 10,
+  "expected_max_sources": 25,
+  "truncate": 5000,
+  "workspace_prefix": "golden-llm-2025"
+}

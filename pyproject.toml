@@ -1,0 +1,71 @@
+[project]
+name = "calixto-research-workspace"
+version = "0.1.0"
+description = "Agent-first research toolkit: skills, scripts, and templates for structured deep research with full traceability."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "Calixto Research Workspace Contributors" }
+]
+keywords = ["research", "agents", "ai", "web-search", "arxiv", "traceability"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "crawl4ai>=0.4.0",            # ~50MB. Best FOSS URL -> clean markdown pipeline.
+    "ddgs>=9.0.0",                # ~5MB. Free web search, no API key, default provider. (renamed from duckduckgo-search)
+    "arxiv>=2.1.0",               # ~1MB. Official arXiv API client.
+    "pyyaml>=6.0",                # YAML frontmatter parsing for source files.
+]
+
+[project.optional-dependencies]
+brave = [
+    "requests>=2.31.0",           # Brave search uses plain HTTPS calls.
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+calixto-init = "scripts.init_workspace:main"
+calixto-search-web = "scripts.search_web:main"
+calixto-search-arxiv = "scripts.search_arxiv:main"
+calixto-workspace = "scripts.workspace_info:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["scripts", "providers", "tests"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"templates" = "templates"
+"docs" = "docs"
+"examples" = "examples"
+
+[tool.hatch.build.targets.wheel.shared-data]
+"skills" = "skills"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]  # line-length handled by formatter
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
