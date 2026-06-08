@@ -142,12 +142,25 @@ command_exists() { command -v "$1" >/dev/null 2>&1; }
 # are either user-owned (workspaces, notes, ...) or otherwise precious
 # (.git would clobber the developer's repo metadata). The list is
 # evaluated against the basename of each staged entry.
+# Entries that must NEVER be replaced when moving staged content
+# into a target directory. These are:
+#   - User-owned data (workspaces, notes, outputs)
+#   - Repository metadata (.git) that would lose its history
+#   - Toolkit-owned config (config.json) that may carry user overrides
+#
+# .gitignore is NOT protected: it is toolkit configuration that
+# must be installed and updated by every fresh install and update,
+# so users always get the latest ignore rules for generated
+# artifacts (workspaces/, .venv/, etc.). If a user wants to
+# customize the ignore rules, they should commit a separate file
+# (e.g., .gitignore.local) and reference it from .gitignore, or
+# they can fork the toolkit.
 TOOLKIT_PROTECTED_NAMES=(
     "workspaces"
     "notes"
     "outputs"
     ".git"
-    ".gitignore"
+    "config.json"
 )
 
 # move_staging_contents: move every entry from $1 into $2 (including dotfiles).
@@ -211,16 +224,35 @@ build_source_url() {
             echo "git:$REPO_URL:$REPO_BRANCH"
         fi
     else
-        # Tarball: convert repo URL to codeload tarball URL
+        # Tarball: convert repo URL to codeload tarball URL. The path
+        # under /archive/ depends on the ref kind:
+        #   - refs/heads/<branch>  for branches (the default)
+        #   - refs/tags/<tag>      for tags (e.g. v1.2.3)
+        # The previous version always built refs/heads/<version>,
+        # which silently 404'd for tagged-version installs whenever
+        # git was unavailable. The URL kind is therefore derived
+        # from the *source* flag, not from the ref string itself:
+        # we can't tell a tag from a branch by name alone.
         local tarball_base
+        # We accept any https URL whose path looks like
+        # /<org>/<repo>, including github.com and self-hosted
+        # GitHub Enterprise instances. The strict github.com
+        # check we used to have here blocked self-hosted and our
+        # own integration tests (which point at a local HTTP
+        # server with a non-github.com URL).
         case "$REPO_URL" in
-            https://github.com/*) tarball_base="${REPO_URL%.git}/archive/refs/heads" ;;
-            *) fail "Cannot derive tarball URL from: $REPO_URL. Install git or set CALIXTO_REPO_URL to a GitHub URL." ;;
+            https://*/*/*)
+                tarball_base="${REPO_URL%.git}/archive"
+                tarball_base="${tarball_base%/}"
+                ;;
+            *) fail "Cannot derive tarball URL from: $REPO_URL. URL must look like https://host/org/repo (no .git suffix)." ;;
         esac
         if [ -n "$VERSION" ]; then
-            echo "tarball:${tarball_base}/${VERSION}.tar.gz"
+            # CALIXTO_VERSION is treated as a tag. Tags are version
+            # pins like v0.1.0, not branch names.
+            echo "tarball:${tarball_base}/refs/tags/${VERSION}.tar.gz"
         else
-            echo "tarball:${tarball_base}/${REPO_BRANCH}.tar.gz"
+            echo "tarball:${tarball_base}/refs/heads/${REPO_BRANCH}.tar.gz"
         fi
     fi
 }
@@ -260,22 +292,34 @@ fresh_install() {
             ;;
         tarball:*)
             local url="${src#tarball:}"
-            run curl -fsSL "$url" -o "$TARGET_DIR/.calixto.tar.gz"
+            # CALIXTO_INSECURE_TLS=1 skips TLS certificate verification
+            # for the tarball host. Use only for self-signed hosts in
+            # air-gapped environments; production usage against
+            # github.com does not need it.
+            if [ "${CALIXTO_INSECURE_TLS:-0}" = "1" ]; then
+                run curl -fsSLk "$url" -o "$TARGET_DIR/.calixto.tar.gz"
+            else
+                run curl -fsSL "$url" -o "$TARGET_DIR/.calixto.tar.gz"
+            fi
             run tar -xzf "$TARGET_DIR/.calixto.tar.gz" -C "$TARGET_DIR"
-            # Tarballs extract into <repo>-<ref>/ directory. Find it and
-            # move its contents up.
+            # Tarballs extract into <repo>-<ref>/ directory under the
+            # target. We must search under $TARGET_DIR explicitly: the
+            # installer may be invoked from a different cwd (e.g.
+            # `curl ... | bash` runs in /tmp or similar), and a
+            # bare `calixto-*/` glob is relative to the process cwd,
+            # not the install target. Anchoring the search to
+            # $TARGET_DIR also matches the update path, which already
+            # searches under its staging directory.
             local extracted_dir=""
-            # The pattern `calixto-*/` matches a single directory. If
-            # multiple exist (shouldn't happen), the first wins.
-            for entry in calixto-*/; do
+            for entry in "$TARGET_DIR"/calixto-*/; do
                 [ -d "$entry" ] || continue
                 extracted_dir="$entry"
                 break
             done
             if [ -z "$extracted_dir" ]; then
-                fail "Tarball extraction did not produce an expected calixto-* directory."
+                fail "Tarball extraction did not produce an expected calixto-* directory under $TARGET_DIR."
             fi
-            move_staging_contents "$TARGET_DIR/$extracted_dir" "$TARGET_DIR"
+            move_staging_contents "$extracted_dir" "$TARGET_DIR"
             # Cleanup tarball artifacts
             run rm -rf "$TARGET_DIR/calixto-"*
             run rm -f "$TARGET_DIR/.calixto.tar.gz"
@@ -386,7 +430,11 @@ update_workspace() {
             ;;
         tarball:*)
             local url="${src#tarball:}"
-            run curl -fsSL "$url" -o "$staging/repo.tar.gz"
+            if [ "${CALIXTO_INSECURE_TLS:-0}" = "1" ]; then
+                run curl -fsSLk "$url" -o "$staging/repo.tar.gz"
+            else
+                run curl -fsSL "$url" -o "$staging/repo.tar.gz"
+            fi
             run tar -xzf "$staging/repo.tar.gz" -C "$staging"
             local extracted_dir=""
             for entry in "$staging"/calixto-*/; do

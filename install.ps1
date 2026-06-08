@@ -21,9 +21,16 @@ param(
     [switch]$DryRun,
     [switch]$NonInteractive,
     [switch]$SkipDeps,
+    # -Version is treated as a git tag (e.g. v0.1.0). It produces
+    # the archive URL archive/refs/tags/<Version>.tar.gz in
+    # tarball fallback mode. -Branch is treated as a branch name
+    # and produces archive/refs/heads/<Branch>.tar.gz. -Ref is an
+    # advanced escape hatch for an arbitrary ref; it short-circuits
+    # the branch/tag distinction in the URL builder.
     [string]$Version = $env:CALIXTO_VERSION,
     [string]$RepoUrl = $(if ($env:CALIXTO_REPO_URL) { $env:CALIXTO_REPO_URL } else { 'https://github.com/calixto/calixto.git' }),
-    [string]$Branch = $(if ($env:CALIXTO_REPO_BRANCH) { $env:CALIXTO_REPO_BRANCH } else { 'main' })
+    [string]$Branch = $(if ($env:CALIXTO_REPO_BRANCH) { $env:CALIXTO_REPO_BRANCH } else { 'main' }),
+    [string]$Ref = $env:CALIXTO_REF
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,10 +53,103 @@ $WorkspaceMarkers = @(
     'skills'
 )
 
+# Entries that must NEVER be replaced when moving staged content
+# into a target directory. These are user-owned data (workspaces,
+# notes, outputs), repository metadata (.git) that would lose its
+# history, and toolkit-owned config (config.json) that may carry
+# user overrides. The list mirrors the Unix installer's
+# TOOLKIT_PROTECTED_NAMES array; both lists MUST stay in sync
+# because the same data-integrity hazards exist on each platform.
+$ProtectedEntries = @(
+    '.git',
+    'workspaces',
+    'notes',
+    'outputs',
+    'config.json'
+)
+
+# Test whether a top-level entry name is protected. Used by the
+# update loops below to skip data and metadata that the staged
+# copy must not overwrite.
+function Test-ProtectedEntry {
+    param([string]$Name)
+    foreach ($p in $ProtectedEntries) {
+        if ($Name -eq $p) { return $true }
+    }
+    return $false
+}
+
 function Write-Section { param($m) Write-Host "`n=== $m ===" -ForegroundColor Cyan }
 function Write-Info    { param($m) Write-Host "  -> $m" -ForegroundColor Gray }
 function Write-Warn    { param($m) Write-Host "  !! $m" -ForegroundColor Yellow }
 function Write-Fail    { param($m) Write-Host "  XX $m" -ForegroundColor Red; exit 1 }
+
+# Extract a gzipped tar archive at $Tarball into $Destination.
+# We use `tar.exe` (shipped with Windows 10 1803+ as part of
+# libarchive, and on every supported Unix), not PowerShell's
+# Expand-Archive, because Expand-Archive only handles ZIP and
+# silently returns exit 1 on a `.tar.gz`. The gitHub codeload
+# archives we fetch are `.tar.gz`, so Expand-Archive would make
+# the tarball fallback unusable on Windows.
+#
+# The function checks $LASTEXITCODE after the call because
+# PowerShell try/catch does not reliably catch native
+# executable nonzero exits, as documented in setup.ps1.
+function Expand-TarGz {
+    param(
+        [Parameter(Mandatory)] [string] $Tarball,
+        [Parameter(Mandatory)] [string] $Destination
+    )
+    $tar = Get-Command tar -ErrorAction SilentlyContinue
+    if (-not $tar) {
+        Write-Fail "Cannot extract tarball: 'tar' is not on PATH. Install Windows 10 1803+ (which ships tar.exe) or install Git for Windows, then re-run."
+    }
+    & tar -xzf $Tarball -C $Destination
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "tar -xzf failed (rc=$LASTEXITCODE) for $Tarball. The archive may be corrupt or in an unsupported format."
+    }
+}
+
+# Download $Url to $Destination using curl.exe (bundled with
+# Windows 10 1803+). We avoid `Invoke-WebRequest` because it
+# has a long-standing bug ("Cannot determine the frame size or
+# a corrupted frame was received") when fetching from a localhost
+# HTTP server on some PowerShell versions; curl.exe does not
+# have this problem. As a secondary benefit, the installer
+# becomes a uniform script across platforms: the Unix and
+# Windows installers both invoke `curl` for tarball downloads.
+function Download-File {
+    param(
+        [Parameter(Mandatory)] [string] $Url,
+        [Parameter(Mandatory)] [string] $Destination
+    )
+    $curl = Get-Command curl -ErrorAction SilentlyContinue
+    if (-not $curl) {
+        # Use a here-string to avoid the PowerShell parser
+        # misinterpreting $Url: as a scope-qualified variable
+        # inside a double-quoted string.
+        $msg = @"
+Cannot download ${Url}: 'curl' is not on PATH. Install Windows 10 1803+ (which ships curl.exe) or install Git for Windows, then re-run.
+"@
+        Write-Fail $msg
+    }
+    # -s silent, -S show errors, -L follow redirects, -f fail
+    # fast on HTTP errors. We use the .exe name explicitly to
+    # avoid PowerShell's alias for Invoke-WebRequest. -k skips
+    # TLS verification, which is opt-in via CALIXTO_INSECURE_TLS=1
+    # for air-gapped environments that use a self-signed tarball
+    # host (and is what the integration test suite needs against a
+    # localhost fixture). Production usage against github.com does
+    # not need -k.
+    $extraArgs = @()
+    if ($env:CALIXTO_INSECURE_TLS -eq '1') {
+        $extraArgs += '-k'
+    }
+    & curl.exe -sSLf @extraArgs -o $Destination $Url
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "curl download failed (rc=$LASTEXITCODE) for $Url -> $Destination. If the tarball host uses a self-signed certificate, retry with CALIXTO_INSECURE_TLS=1."
+    }
+}
 
 function Test-Workspace {
     foreach ($marker in $WorkspaceMarkers) {
@@ -87,16 +187,42 @@ function Invoke-Step {
 function Get-RepoSource {
     # Prefer git if available, else tarball
     if (Get-Command git -ErrorAction SilentlyContinue) {
-        $ref = if ($Version) { $Version } else { $Branch }
+        # -Ref (advanced) overrides everything else. Otherwise
+        # -Version is a tag and -Branch is a branch.
+        if ($Ref) {
+            $ref = $Ref
+        } elseif ($Version) {
+            $ref = $Version
+        } else {
+            $ref = $Branch
+        }
         return @{ Mode = 'git'; Url = $RepoUrl; Ref = $ref }
     }
-    # Tarball fallback
-    if ($RepoUrl -notmatch '^https://github\.com/') {
-        Write-Fail "Cannot derive tarball URL from: $RepoUrl. Install git or set CALIXTO_REPO_URL to a GitHub URL."
+    # Tarball fallback. We accept any https URL whose host is
+    # github.com (or a github-equivalent like GitHub Enterprise).
+    # The GitHub codeload archive path works for github.com and for
+    # GitHub Enterprise instances as long as the URL prefix ends
+    # in `/<org>/<repo>`. The strict github.com check we used to
+    # have here blocked self-hosted GitHub Enterprise and our
+    # own integration tests, which need to point at a local HTTP
+    # server with a non-github.com URL.
+    if ($RepoUrl -notmatch '^https://[^/]+/[^/]+/[^/]+/?$') {
+        Write-Fail "Cannot derive tarball URL from: $RepoUrl. URL must look like https://host/org/repo (no .git suffix)."
     }
-    $base = $RepoUrl -replace '\.git$', ''
-    $ref = if ($Version) { $Version } else { $Branch }
-    return @{ Mode = 'tarball'; Url = "$base/archive/refs/heads/$ref.tar.gz" }
+    $base = $RepoUrl -replace '\.git$', '' -replace '/$', ''
+    # The archive path depends on the ref kind:
+    #   - refs/heads/<Branch>  for branches (the default)
+    #   - refs/tags/<Version>  for tags (e.g. v0.1.0)
+    # -Ref is an arbitrary ref name; we use the unprefixed
+    # `/archive/<ref>` form, which the codeload server accepts
+    # for any ref and which is the most permissive.
+    if ($Ref) {
+        return @{ Mode = 'tarball'; Url = "$base/archive/$Ref.tar.gz" }
+    }
+    if ($Version) {
+        return @{ Mode = 'tarball'; Url = "$base/archive/refs/tags/$Version.tar.gz" }
+    }
+    return @{ Mode = 'tarball'; Url = "$base/archive/refs/heads/$Branch.tar.gz" }
 }
 
 # =================================================================
@@ -140,9 +266,9 @@ function Invoke-FreshInstall {
         }
         'tarball' {
             $tarball = Join-Path $staging 'repo.tar.gz'
-            Invoke-Step { Invoke-WebRequest -Uri $src.Url -OutFile $tarball }
+            Invoke-Step { Download-File -Url $src.Url -Destination $tarball }
             if (-not $DryRun) {
-                Expand-Archive -Path $tarball -DestinationPath $staging -Force
+                Expand-TarGz -Tarball $tarball -Destination $staging
                 $extracted = Get-ChildItem -LiteralPath $staging -Directory | Where-Object { $_.Name -like 'calixto-*' } | Select-Object -First 1
                 if ($extracted) {
                     Get-ChildItem -LiteralPath $extracted.FullName -Force | ForEach-Object {
@@ -231,7 +357,19 @@ function Invoke-UpdateWorkspace {
             Invoke-Step { git clone --depth 1 --branch $src.Ref $src.Url (Join-Path $staging 'repo') }
             if (-not $DryRun) {
                 $clonedDir = Join-Path $staging 'repo'
+                # Move each staged entry into the target, EXCEPT the
+                # protected names. The staged clone contains a `.git`
+                # directory whose metadata (branches, remotes, reflogs,
+                # hooks, uncommitted index) we must not clobber on an
+                # existing repo. User-owned data and toolkit config
+                # (config.json) are also protected; the .local
+                # override files and the data dirs are restored from
+                # $backupDir further down.
                 Get-ChildItem -LiteralPath $clonedDir -Force | ForEach-Object {
+                    if (Test-ProtectedEntry $_.Name) {
+                        Write-Info "Skipping protected entry from staged clone: $($_.Name)"
+                        return
+                    }
                     $dst = Join-Path $TargetDir $_.Name
                     if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
                     Move-Item -LiteralPath $_.FullName -Destination $dst -Force
@@ -240,12 +378,20 @@ function Invoke-UpdateWorkspace {
         }
         'tarball' {
             $tarball = Join-Path $staging 'repo.tar.gz'
-            Invoke-Step { Invoke-WebRequest -Uri $src.Url -OutFile $tarball }
+            Invoke-Step { Download-File -Url $src.Url -Destination $tarball }
             if (-not $DryRun) {
-                Expand-Archive -Path $tarball -DestinationPath $staging -Force
+                Expand-TarGz -Tarball $tarball -Destination $staging
                 $extracted = Get-ChildItem -LiteralPath $staging -Directory | Where-Object { $_.Name -like 'calixto-*' } | Select-Object -First 1
                 if ($extracted) {
+                    # Same protection rules as the git path. A tarball
+                    # of a toolkit release also contains a `.git` if
+                    # the maintainer ships one; we must not clobber
+                    # the existing repo's metadata either way.
                     Get-ChildItem -LiteralPath $extracted.FullName -Force | ForEach-Object {
+                        if (Test-ProtectedEntry $_.Name) {
+                            Write-Info "Skipping protected entry from tarball: $($_.Name)"
+                            return
+                        }
                         $dst = Join-Path $TargetDir $_.Name
                         if (Test-Path $dst) { Remove-Item $dst -Recurse -Force }
                         Move-Item -LiteralPath $_.FullName -Destination $dst -Force

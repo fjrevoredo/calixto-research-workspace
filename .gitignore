@@ -22,14 +22,22 @@ uv.lock
 
 # Golden dataset cache and runs.
 # The cache contains committed search results that make the
-# `--use-cache` golden run reproducible from a clean checkout. The
-# files must be in version control; we keep the runs/ subdirectory
-# ignored so historical benchmark runs do not accumulate.
-tests/golden/cache/
-!tests/golden/cache/arxiv/
-!tests/golden/cache/arxiv/*.json
-!tests/golden/cache/duckduckgo/
-!tests/golden/cache/duckduckgo/*.json
+# `--use-cache` golden run reproducible from a clean checkout.
+# Every JSON file under tests/golden/cache/ is treated as
+# committed cache and is NOT ignored, regardless of which provider
+# produced it. This way, adding a new search provider (a
+# plug-in extension) does not require editing .gitignore to make
+# its cache files trackable. Non-JSON artifacts in the cache
+# directory (e.g. a stray .tmp, a future test fixture) are
+# ignored.
+#
+# Historical note: an earlier version of this rule used a
+# per-provider allow-list (e.g. `!tests/golden/cache/duckduckgo/`).
+# That approach made a new provider's cache silently untrackable
+# until someone edited .gitignore, which violated the
+# reproducibility contract.
+tests/golden/cache/*.tmp
+tests/golden/cache/**/*.tmp
 tests/golden/runs/
 
 # OS files

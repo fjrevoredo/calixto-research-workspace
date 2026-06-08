@@ -65,3 +65,64 @@ def test_cache_files_have_at_least_one_result_each() -> None:
             f"cache file {f.name} has no results; a --use-cache run "
             "would have nothing to replay."
         )
+
+
+def test_future_cache_file_is_not_ignored() -> None:
+    """A hypothetical new cache file under any provider must NOT be
+    ignored by .gitignore.
+
+    Regression: a previous version of .gitignore used a per-provider
+    allow-list (e.g. `!tests/golden/cache/duckduckgo/`). That made
+    a new provider's cache silently untrackable until someone
+    edited .gitignore, which violated the reproducibility
+    contract. The current policy allows all `*.json` files under
+    `tests/golden/cache/` regardless of provider, so adding a
+    new search provider is a no-op for .gitignore.
+
+    We pick a name that does not currently exist on disk so the
+    test fails if the policy is wrong (even if the rule happens
+    to match an existing file).
+    """
+    # `git check-ignore` exit code semantics: 0 = ignored, 1 = not
+    # ignored, 128 = error. We want the file to be NOT ignored
+    # (so a future commit picks it up), so we expect exit 1.
+    candidates = [
+        # Existing provider, brand-new filename
+        "tests/golden/cache/duckduckgo/future-cache.json",
+        # Brand-new provider, brand-new filename
+        "tests/golden/cache/newprovider/abc.json",
+        # Brand-new provider nested two levels deep
+        "tests/golden/cache/v2/anthropic/result.json",
+    ]
+    for candidate in candidates:
+        result = subprocess.run(
+            ["git", "check-ignore", candidate],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1, (
+            f"cache file is ignored by .gitignore but should not be: {candidate!r}. "
+            f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+
+    # Non-JSON artifacts (e.g. a temp file or a future test
+    # fixture) must still be ignored. We assert this so a
+    # too-permissive rewrite of .gitignore that stops ignoring
+    # .tmp/.swp etc. would be caught here.
+    non_json_candidates = [
+        "tests/golden/cache/duckduckgo/draft.tmp",
+        "tests/golden/cache/duckduckgo/lock.swp",
+        "tests/golden/cache/newprovider/result.bak",
+    ]
+    for candidate in non_json_candidates:
+        result = subprocess.run(
+            ["git", "check-ignore", candidate],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"non-JSON cache artifact is NOT ignored by .gitignore: {candidate!r}. "
+            f"rc={result.returncode} stdout={result.stdout!r}"
+        )
