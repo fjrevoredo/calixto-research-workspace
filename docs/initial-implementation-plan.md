@@ -217,7 +217,7 @@ None. All requirements were clarified before plan creation. If questions arise d
   6. Run `crawl4ai-setup` to install Playwright browsers
   7. Run `python -m playwright install chromium` as fallback
   8. Print progress at each step with clear labels and sizes
-  9. Verify installation: `python -c "import crawl4ai, duckduckgo_search, arxiv"`
+  9. Verify installation: `python -c "import crawl4ai, ddgs, arxiv"`
   10. Print final summary: "Setup complete. Total installed: ~500MB"
 - Validation: On a clean Linux system, `./setup.sh` completes without errors and the verification import succeeds. `pyproject.toml` exists with correct dependencies.
 - Notes: Script must be idempotent. Must print what it's doing per Honest Complexity principle.

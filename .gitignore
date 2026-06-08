@@ -20,8 +20,16 @@ env/
 # uv lock file (regenerated on uv sync)
 uv.lock
 
-# Golden dataset cache and runs
+# Golden dataset cache and runs.
+# The cache contains committed search results that make the
+# `--use-cache` golden run reproducible from a clean checkout. The
+# files must be in version control; we keep the runs/ subdirectory
+# ignored so historical benchmark runs do not accumulate.
 tests/golden/cache/
+!tests/golden/cache/arxiv/
+!tests/golden/cache/arxiv/*.json
+!tests/golden/cache/duckduckgo/
+!tests/golden/cache/duckduckgo/*.json
 tests/golden/runs/
 
 # OS files

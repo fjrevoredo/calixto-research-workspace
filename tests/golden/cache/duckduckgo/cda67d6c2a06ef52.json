@@ -1,0 +1,55 @@
+{
+  "provider": "duckduckgo",
+  "query": "best open source LLM local deployment 2025",
+  "max_results": 5,
+  "params": {},
+  "timestamp": "2026-06-07T00:00:00Z",
+  "result_count": 5,
+  "results": [
+    {
+      "url": "https://blog.n8n.io/open-source-llm/",
+      "title": "The 11 best open-source LLMs for 2025 – n8n Blog",
+      "snippet": "discuss the reasons behind the surge in open-source LLM deploymentsrecognize potential pitfalls and challengesreview the 11 best open-source LLMs on the market",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 1
+      }
+    },
+    {
+      "url": "https://huggingface.co/blog/daya-shankar/open-source-llms",
+      "title": "Best Open-Source LLM Models in 2026: Coding, Local, Agentic AI...",
+      "snippet": "Best Open-Source LLM for Coding in 2026. Coding is where open models have made the biggest jump. The right model depends on whether you need autocomplete, code review, repo-level bug fixing, or a full agent that can plan and run tools.",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 2
+      }
+    },
+    {
+      "url": "https://www.youtube.com/watch?v=UtSSMs6ObqY",
+      "title": "Learn Ollama in 15 Minutes - Run LLM Models Locally for... - YouTube",
+      "snippet": "Get 25% off SEO Writing using my code TWT25 → https://seowriting.ai/?utm_source=youtube&utm_medium=tech_with_timIn this short video, I'll teach you everythin...",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 3
+      }
+    },
+    {
+      "url": "https://www.instaclustr.com/education/open-source-ai/top-10-open-source-llms-for-2025/",
+      "title": "Top 10 open source LLMs for 2025",
+      "snippet": "Organizations can deploy open source LLMs on their private infrastructure, ensuring sensitive information remains in-house and complies with data protection requirements. Cost savings and reduced vendor dependency: Since the code and models are freely available...",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 4
+      }
+    },
+    {
+      "url": "https://getstream.io/blog/best-local-llm-tools/",
+      "title": "The 6 Best LLM Tools To Run Models Locally",
+      "snippet": "Also, Open LLm Leaderboard and LMSYS Chatbot Arena provide detailed information and benchmarks for varieties of LLMs. Local LLM Tools Conclusion. As discussed in this article, several motives exist for choosing and using large language models like DeepSeek R1 locally.",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 5
+      }
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "provider": "duckduckgo",
+  "query": "calixto test",
+  "max_results": 2,
+  "params": {},
+  "timestamp": "2026-06-07T00:00:00Z",
+  "result_count": 2,
+  "results": [
+    {
+      "url": "https://elderscrolls.fandom.com/wiki/Calixto_Corrium",
+      "title": "Calixto Corrium - Elder Scrolls Wiki - Fandom",
+      "snippet": "2 weeks ago - He appears to enjoy displaying his collection, saying that he believes his sister would be proud to bring smiles to visitors.[1] That being said, after Wuunferth reveals the true nature of the Strange Amulet, he claims that Calixto and his books are \"often confused\" on such matters, although Wuunferth does say that it happens to \"the best of us,\" suggesting that the mage holds some respect for Calixto.[5] Guards also seem to respect him to a degree, saying he \"has a good eye\" for strange trinkets.[7] Jorleif believes Calixto to be a bit \"odd,\" although he stops short of suspecting anything dubious about the imperial.[11]",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 1
+      }
+    },
+    {
+      "url": "https://en.uesp.net/wiki/Skyrim:Calixto_Corrium",
+      "title": "Skyrim:Calixto Corrium - UESP Wiki - The Unofficial Elder Scrolls Pages",
+      "snippet": "February 1, 2026 - Calixto Corrium is an Imperial rogue living the life of leisure in Windhelm. He used to go adventuring with his sister Lucilla until she passed away. After that, he settled down and opened Calixto's House of Curiosities to put on display the assortment of curiosities he had collected, such ...",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 2
+      }
+    }
+  ]
+}

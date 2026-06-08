@@ -8,6 +8,9 @@ directory. They verify:
 - The installed target contains every workspace marker
 - A non-empty target directory is rejected
 - A botched install (markers missing) exits nonzero and preserves staging
+- The update mode preserves user-owned data, repository metadata, and
+  config overrides; replaces toolkit-owned entries; does not abort on
+  non-empty directory collisions
 
 The tests require a POSIX shell environment where install.sh can be run
 with the bash host's native path semantics. They are skipped on Windows
@@ -18,6 +21,7 @@ impractical to drive install.sh from a Windows Python test harness.
 from __future__ import annotations
 
 import os
+import py_compile
 import shutil
 import subprocess
 import sys
@@ -195,3 +199,104 @@ def test_fresh_install_fails_on_incomplete_install(tmp_path: Path) -> None:
     assert not (target / "AGENTS.md").exists()
     # Staging dir preserved
     assert (target / ".calixto-tmp").exists()
+
+
+def test_update_preserves_user_data_and_replaces_toolkit(tmp_path: Path) -> None:
+    """Update mode must:
+    - preserve user-owned data: workspaces/, notes/, outputs/, config.json, *.local
+    - preserve repository metadata: .git/
+    - replace toolkit-owned entries: scripts/, providers/, etc.
+    - succeed when the target already contains a non-empty scripts/ tree
+      (collision handling must not abort on non-empty directories)
+    """
+    remote = tmp_path / "remote.git"
+    target = tmp_path / "install-target"
+    target.mkdir()
+    _build_remote_repo(remote)
+
+    # Pre-populate the target with a "previous" version of the toolkit
+    # plus user-owned data. The "previous" scripts/ has files the
+    # current toolkit will replace.
+    for marker in WORKSPACE_MARKERS:
+        src = REPO_ROOT / marker
+        if not src.exists():
+            continue
+        dst = target / marker
+        if src.is_dir():
+            shutil.copytree(src, dst)
+        else:
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, dst)
+    # User-owned data must be preserved verbatim
+    user_workspaces = target / "workspaces" / "user-research"
+    user_workspaces.mkdir(parents=True)
+    user_notes = user_workspaces / "notes"
+    user_notes.mkdir()
+    (user_notes / "findings.md").write_text(
+        "## fnd_001\n**Source:** src_001\n**Fact:** user fact\n",
+        encoding="utf-8",
+    )
+    # User-owned config
+    (target / "config.json").write_text(
+        '{"user_overrides": "preserved"}',
+        encoding="utf-8",
+    )
+    (target / "settings.local").write_text(
+        "user-controlled data",
+        encoding="utf-8",
+    )
+    # A .git directory (the developer's repo metadata)
+    git_dir = target / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (git_dir / "config").write_text("[user]\n\tname = test\n", encoding="utf-8")
+
+    # Sanity: the marker under test is present before update
+    assert (target / "scripts" / "init_workspace.py").is_file()
+    user_facts_before = (user_notes / "findings.md").read_text(encoding="utf-8")
+    user_config_before = (target / "config.json").read_text(encoding="utf-8")
+    user_local_before = (target / "settings.local").read_text(encoding="utf-8")
+    user_git_head_before = (git_dir / "HEAD").read_text(encoding="utf-8")
+
+    # The installer enters update mode when the target already looks
+    # like a Calixto workspace. Run it with --skip-deps so we only
+    # exercise the file-move / restore logic, not the (potentially
+    # network-dependent) setup step.
+    env = {**os.environ, "CALIXTO_REPO_URL": str(remote), "CALIXTO_SKIP_DEPS": "1"}
+    # Use --non-interactive so the confirmation prompt does not block
+    # in the test environment.
+    result = subprocess.run(
+        ["bash", str(INSTALL_SH), "--non-interactive", "--skip-deps"],
+        cwd=str(target),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"update installer failed (rc={result.returncode})\n"
+        f"stdout={result.stdout}\nstderr={result.stderr}"
+    )
+    # User-owned workspace data must be intact
+    assert (target / "workspaces" / "user-research" / "notes" / "findings.md").is_file()
+    user_facts_after = (user_notes / "findings.md").read_text(encoding="utf-8")
+    assert user_facts_after == user_facts_before, "user notes content was modified"
+    # config.json must be preserved
+    user_config_after = (target / "config.json").read_text(encoding="utf-8")
+    assert user_config_after == user_config_before, "config.json was modified"
+    # *.local must be preserved
+    user_local_after = (target / "settings.local").read_text(encoding="utf-8")
+    assert user_local_after == user_local_before, "*.local file was modified"
+    # .git/ must be preserved
+    assert (git_dir / "HEAD").is_file()
+    assert (git_dir / "HEAD").read_text(encoding="utf-8") == user_git_head_before, (
+        ".git/HEAD was modified by the update"
+    )
+    # Toolkit-owned entries must be replaced with the new remote's
+    # content. We can't easily check byte equality against the remote,
+    # but we can check that scripts/init_workspace.py is still present
+    # and parses.
+    assert (target / "scripts" / "init_workspace.py").is_file()
+    py_compile.compile(
+        str(target / "scripts" / "init_workspace.py"),
+        doraise=True,
+    )

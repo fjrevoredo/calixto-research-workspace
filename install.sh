@@ -138,21 +138,65 @@ confirm() {
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+# Entries that must NEVER be replaced during a toolkit update. These
+# are either user-owned (workspaces, notes, ...) or otherwise precious
+# (.git would clobber the developer's repo metadata). The list is
+# evaluated against the basename of each staged entry.
+TOOLKIT_PROTECTED_NAMES=(
+    "workspaces"
+    "notes"
+    "outputs"
+    ".git"
+    ".gitignore"
+)
+
 # move_staging_contents: move every entry from $1 into $2 (including dotfiles).
 # Uses nullglob + dotglob (enabled at script top) to avoid subshells.
+#
+# This function is used by both the fresh-install and update paths.
+# The fresh path moves into an empty directory, so the only concern is
+# the toolkit itself. The update path moves into a directory that may
+# already contain user data, so we must NOT clobber:
+#   - .git (would replace the developer's repo metadata)
+#   - workspaces/, notes/, outputs/ (user-owned data)
+#   - config.json and *.local (user config; backed up & restored below)
+# For toolkit-owned entries that DO collide (scripts/, providers/, etc.),
+# we replace the target's contents before the move so non-empty
+# directories do not abort the update with `mv: cannot overwrite`.
 move_staging_contents() {
     local src="$1"
     local dst="$2"
     if [ ! -d "$src" ]; then
         return 0
     fi
-    # Iterate entries, including hidden ones. nullglob turns "no match" into
-    # the empty list rather than a literal pattern.
-    local entry
+    local entry name target is_protected
     for entry in "$src"/* "$src"/.[!.]*; do
         [ -e "$entry" ] || continue
-        # -f to overwrite existing files, since a previous partial install
-        # may have left them in place.
+        name="$(basename "$entry")"
+        # Skip protected names. This handles both the fresh-install
+        # case (no collisions possible anyway) and the update case
+        # (the protected names are exactly the ones we want to
+        # preserve).
+        is_protected=0
+        for protected in "${TOOLKIT_PROTECTED_NAMES[@]}"; do
+            if [ "$name" = "$protected" ]; then
+                is_protected=1
+                break
+            fi
+        done
+        if [ "$is_protected" -eq 1 ]; then
+            continue
+        fi
+        target="$dst/$name"
+        # If the target is a non-empty directory, recursively remove
+        # its contents first. This makes the subsequent mv atomic per
+        # top-level entry: a collision with a directory full of files
+        # from an older toolkit version is resolved by replacing the
+        # whole directory. Individual file collisions are overwritten
+        # by `mv -f`.
+        if [ -d "$target" ]; then
+            rm -rf "$target"
+        fi
         mv -f "$entry" "$dst/"
     done
 }

@@ -107,7 +107,7 @@ The setup script installs `uv`, syncs Python dependencies, installs Playwright b
 ### Verify
 
 ```bash
-python -c "import crawl4ai, duckduckgo_search, arxiv; print('ready')"
+python -c "import crawl4ai, ddgs, arxiv; print('ready')"
 ```
 
 ## How to Use (Research Mode)

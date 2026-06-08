@@ -56,22 +56,52 @@ info "Python dependencies installed"
 # 4. Install Playwright browser via crawl4ai-setup
 log "Step 4/6: Installing Playwright + Chromium for Crawl4AI"
 info "This downloads Chromium (~450MB) and may take a few minutes"
-if ! uv run crawl4ai-setup 2>/dev/null; then
+chromium_ok=0
+if uv run crawl4ai-setup 2>/dev/null; then
+    chromium_ok=1
+else
     warn "crawl4ai-setup encountered an issue; falling back to playwright install chromium"
-    if ! uv run python -m playwright install chromium; then
-        warn "Playwright Chromium install had issues. Web scraping may not work until fixed."
+    if uv run python -m playwright install chromium; then
+        chromium_ok=1
+    else
+        warn "Playwright Chromium install failed. Web scraping may not work until fixed."
         warn "See https://playwright.dev/python/docs/intro for manual install."
     fi
 fi
 
-# 5. Verify the install. The DuckDuckGo provider imports `ddgs`
-# (the current name of the duckduckgo-search package). We verify `ddgs`,
-# not the unmaintained `duckduckgo_search` module.
+# 5. Verify the install. We verify the live `ddgs` module name.
 log "Step 5/6: Verifying installation"
 VERIFY_OUTPUT="$(uv run python -c 'import crawl4ai, ddgs, arxiv, yaml; print("ok")' 2>&1)" || {
     fail "Verification import failed: $VERIFY_OUTPUT"
 }
 info "All required packages importable: $VERIFY_OUTPUT"
+
+# 5b. Verify Chromium is installed and launchable. The default
+# scraping provider (Crawl4AI / Playwright) needs a working browser
+# to actually fetch pages; without it, search_web.py --no-scrape
+# still works, but the default mode (with scraping) is unusable.
+# A missing browser is therefore a setup failure, not a warning.
+if [ "$chromium_ok" -ne 1 ]; then
+    fail "Chromium was not installed successfully. Web scraping is the default mode; without Chromium, search_web.py will not be able to fetch pages. Re-run with explicit: uv run python -m playwright install chromium"
+fi
+# Browser launch check: ask Playwright where Chromium lives, then
+# try to launch it headless and verify the executable responds. We
+# use a 30s timeout because the first launch can be slow.
+LAUNCH_OUTPUT="$(uv run python -c "
+from playwright.sync_api import sync_playwright
+import sys
+try:
+    with sync_playwright() as p:
+        b = p.chromium.launch(headless=True, args=['--no-sandbox'])
+        b.close()
+    print('ok')
+except Exception as e:
+    print(f'launch_failed: {e}', file=sys.stderr)
+    sys.exit(1)
+" 2>&1)" || {
+    fail "Chromium install completed but the browser failed to launch: $LAUNCH_OUTPUT"
+}
+info "Chromium launch check passed"
 
 # 6. Print summary
 log "Step 6/6: Setup complete"

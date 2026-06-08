@@ -90,21 +90,21 @@ Write-Info "Python dependencies installed"
 # 5. Install Playwright + Chromium via crawl4ai-setup
 Write-Section "Step 5/7: Installing Playwright + Chromium for Crawl4AI"
 Write-Info "This downloads Chromium (~450MB) and may take a few minutes"
-$crawl4aiOk = $false
+$chromiumOk = $false
 uv run crawl4ai-setup 2>&1 | Out-Null
 if ($LASTEXITCODE -eq 0) {
-    $crawl4aiOk = $true
+    $chromiumOk = $true
 } else {
     Write-Warn "crawl4ai-setup returned rc=$LASTEXITCODE; falling back to direct playwright install"
     uv run python -m playwright install chromium 2>&1 | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "Playwright Chromium install had issues (rc=$LASTEXITCODE). Web scraping may not work until fixed."
-        Write-Warn "See https://playwright.dev/python/docs/intro for manual install on Windows."
+    if ($LASTEXITCODE -eq 0) {
+        $chromiumOk = $true
+    } else {
+        Write-Warn "Playwright Chromium install had issues (rc=$LASTEXITCODE)."
     }
 }
 
-# 6. Verify the install. We verify the live `ddgs` module name
-# (the current name of the duckduckgo-search package).
+# 6. Verify the install. We verify the live `ddgs` module name.
 Write-Section "Step 6/7: Verifying installation"
 $verifyCode = @'
 import sys
@@ -123,6 +123,31 @@ if ($LASTEXITCODE -ne 0) {
     Write-Fail "Verification failed (rc=$LASTEXITCODE): $verifyOutput"
 }
 Write-Info $verifyOutput
+
+# 6b. Verify Chromium is installed and launchable. The default
+# scraping provider (Crawl4AI / Playwright) needs a working browser;
+# without it, search_web.py's default mode is unusable, so a
+# missing browser is a setup failure rather than a warning.
+if (-not $chromiumOk) {
+    Write-Fail "Chromium was not installed successfully. Web scraping is the default mode; without Chromium, search_web.py will not be able to fetch pages. Re-run with explicit: uv run python -m playwright install chromium"
+}
+$launchCode = @'
+from playwright.sync_api import sync_playwright
+import sys
+try:
+    with sync_playwright() as p:
+        b = p.chromium.launch(headless=True)
+        b.close()
+    print("ok")
+except Exception as e:
+    print(f"launch_failed: {e}", file=sys.stderr)
+    sys.exit(1)
+'@
+uv run python -c $launchCode 2>&1 | Tee-Object -Variable launchOutput | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "Chromium install completed but the browser failed to launch (rc=$LASTEXITCODE): $launchOutput"
+}
+Write-Info "Chromium launch check passed"
 
 # 7. Summary
 Write-Section "Step 7/7: Setup complete"

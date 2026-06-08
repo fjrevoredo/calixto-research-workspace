@@ -1,0 +1,46 @@
+{
+  "provider": "duckduckgo",
+  "query": "running LLM locally hardware VRAM requirements",
+  "max_results": 4,
+  "params": {},
+  "timestamp": "2026-06-07T00:00:00Z",
+  "result_count": 4,
+  "results": [
+    {
+      "url": "https://llm-stats.com/blog/research/hardware-requirements-running-llms-locally",
+      "title": "How to Calculate Hardware Requirements for Running LLMs Locally",
+      "snippet": "How to Calculate Hardware Requirements for Running LLMs Locally The complete guide to estimating VRAM, RAM, storage, and compute for self-hosting LLMs. Covers quantization, context length, KV cache, multi-GPU setups, and practical GPU recommendations for every budget.",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 1
+      }
+    },
+    {
+      "url": "https://localai.computer/learn/llm-hardware-guide",
+      "title": "LLM Hardware Guide | GPU, RAM & Storage Requirements 2025",
+      "snippet": "VRAM Requirements GPU VRAM is the primary bottleneck for running LLMs. Understanding VRAM requirements helps you choose the right hardware.",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 2
+      }
+    },
+    {
+      "url": "https://2acrestudios.com/guides/local-llm-hardware/",
+      "title": "Local LLM Hardware Guide 2026: 2 Acre Studios",
+      "snippet": "The definitive 2026 hardware guide for running local LLMs. GPU selection, VRAM requirements, Apple Silicon, multi-GPU, and cost-per-token math: written by engineers who ship production deployments.",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 3
+      }
+    },
+    {
+      "url": "https://www.geeksforgeeks.org/deep-learning/recommended-hardware-for-running-llms-locally/",
+      "title": "Recommended Hardware for Running LLMs Locally - GeeksforGeeks",
+      "snippet": "The GPU is the most critical component for LLM workloads, handling parallel operations, attention layers and large matrix multiplications. High VRAM directly affects which model sizes can run locally without aggressive quantization, making it the main bottleneck to consider when choosing hardware.",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 4
+      }
+    }
+  ]
+}

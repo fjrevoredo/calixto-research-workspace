@@ -1,0 +1,55 @@
+{
+  "provider": "duckduckgo",
+  "query": "Llama 3 Mistral Qwen local inference benchmark 2025",
+  "max_results": 5,
+  "params": {},
+  "timestamp": "2026-06-07T00:00:00Z",
+  "result_count": 5,
+  "results": [
+    {
+      "url": "https://www.aimagicx.com/blog/qwen-3-5-vs-llama-vs-mistral-china-open-source-ai-2026",
+      "title": "Qwen 3.5 vs Llama vs Mistral: China's Open-Source AI Is Catching Up ...",
+      "snippet": "23 Mar 2026 · On HMMT Feb 2025 (a competition math benchmark), Qwen3.5-9B hits 83.2 compared to 76.7 for GPT-OSS-120B. DeepSeek V3.2 outperforms GPT-5 on ...",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 1
+      }
+    },
+    {
+      "url": "https://github.com/intel/ipex-llm",
+      "title": "intel/ipex-llm: Accelerate local LLM inference and finetuning ... - GitHub",
+      "snippet": "28 Jan 2026 · Accelerate local LLM inference and finetuning. IPEX-LLM is an LLM acceleration library for Intel GPU supports Llama 3 on both Intel GPU and CPU ...",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 2
+      }
+    },
+    {
+      "url": "https://www.promptquorum.com/local-llms/best-local-llms-for-coding",
+      "title": "Best Local Coding LLMs 2026: Qwen vs DeepSeek vs Llama",
+      "snippet": "4 Apr 2026 · Qwen 3.6 scores 77.2% SWE-bench. Compare vs DeepSeek-Coder-V3 vs Llama 3.3: VRAM, speed, benchmark scores, and best local coding LLMs for 2026.",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 3
+      }
+    },
+    {
+      "url": "https://www.reddit.com/r/LocalLLaMA/comments/1l1581z/which_model_are_you_using_june25_edition/",
+      "title": "Which model are you using? June'25 edition : r/LocalLLaMA - Reddit",
+      "snippet": "2 Jun 2025 · gemma 3 and qwen 3 are consistent. i like the most 27B gemma and 8B. I get 700 t/sec prompt processing and 10 t/sec generation. Llama 3.1 and ...Qwen3.5 family comparison on shared benchmarksLlama 3.3 vs Qwen 2.5More results from www.reddit.com",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 4
+      }
+    },
+    {
+      "url": "https://www.digitalapplied.com/blog/deepseek-r1-vs-qwen-3-vs-mistral-large-comparison",
+      "title": "DeepSeek R1 vs Qwen 3 vs Mistral Large: LLM Comparison",
+      "snippet": "6 Jan 2026 · Qwen overtook Llama as the most downloaded open-source model family in late 2025 reduce inference costs by 80-90% Qwen 3 delivers the highest ...",
+      "score": 0.0,
+      "metadata": {
+        "duckduckgo_rank": 5
+      }
+    }
+  ]
+}

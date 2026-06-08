@@ -1,0 +1,71 @@
+{
+  "provider": "arxiv",
+  "query": "open source large language model evaluation",
+  "max_results": 4,
+  "params": {
+    "category": "cs.CL",
+    "sort_by": "relevance"
+  },
+  "timestamp": "2026-06-07T00:00:00Z",
+  "result_count": 4,
+  "results": [
+    {
+      "arxiv_id": "1610.00031",
+      "url": "http://arxiv.org/abs/1610.00031v1",
+      "pdf_url": "https://arxiv.org/pdf/1610.00031v1",
+      "title": "Discriminating Similar Languages: Evaluations and Explorations",
+      "summary": "We present an analysis of the performance of machine learning classifiers on discriminating between similar languages and language varieties. We carried out a number of experiments using the results of the two editions of the Discriminating between Similar Languages (DSL) shared task. We investigate the progress made between the two tasks, estimate an upper bound on possible performance using ensemble and oracle combination, and provide learning curves to help us understand which languages are more challenging. A number of difficult sentences are identified and investigated further with human annotation.",
+      "authors": "Cyril Goutte, Serge Léger, Shervin Malmasi, Marcos Zampieri",
+      "date_published": "2016-09-30",
+      "categories": [
+        "cs.CL"
+      ],
+      "primary_category": ""
+    },
+    {
+      "arxiv_id": "2409.11272",
+      "url": "http://arxiv.org/abs/2409.11272v7",
+      "pdf_url": "https://arxiv.org/pdf/2409.11272v7",
+      "title": "LOLA -- An Open-Source Massively Multilingual Large Language Model",
+      "summary": "This paper presents LOLA, a massively multilingual large language model trained on more than 160 languages using a sparse Mixture-of-Experts Transformer architecture. Our architectural and implementation choices address the challenge of harnessing linguistic diversity while maintaining efficiency and avoiding the common pitfalls of multilinguality. Our analysis of the evaluation results shows competitive performance in natural language generation and understanding tasks. Additionally, we demonstrate how the learned expert-routing mechanism exploits implicit phylogenetic linguistic patterns to potentially alleviate the curse of multilinguality. We provide an in-depth look at the training process, an analysis of the datasets, and a balanced exploration of the model's strengths and limitations. As an open-source model, LOLA promotes reproducibility and serves as a robust foundation for future research. Our findings enable the development of compute-efficient multilingual models with strong, scalable performance across languages.",
+      "authors": "Nikit Srivastava, Denis Kuchelev, Tatiana Moteu Ngoli, Kshitij Shetty, Michael Röder, Hamada Zahera, Diego Moussallem, Axel-Cyrille Ngonga Ngomo",
+      "date_published": "2024-09-17",
+      "categories": [
+        "cs.CL",
+        "cs.AI",
+        "cs.LG"
+      ],
+      "primary_category": ""
+    },
+    {
+      "arxiv_id": "2308.16149",
+      "url": "http://arxiv.org/abs/2308.16149v2",
+      "pdf_url": "https://arxiv.org/pdf/2308.16149v2",
+      "title": "Jais and Jais-chat: Arabic-Centric Foundation and Instruction-Tuned Open Generative Large Language Models",
+      "summary": "We introduce Jais and Jais-chat, new state-of-the-art Arabic-centric foundation and instruction-tuned open generative large language models (LLMs). The models are based on the GPT-3 decoder-only architecture and are pretrained on a mixture of Arabic and English texts, including source code in various programming languages. With 13 billion parameters, they demonstrate better knowledge and reasoning capabilities in Arabic than any existing open Arabic and multilingual models by a sizable margin, based on extensive evaluation. Moreover, the models are competitive in English compared to English-centric open models of similar size, despite being trained on much less English data. We provide a detailed description of the training, the tuning, the safety alignment, and the evaluation of the models. We release two open versions of the model -- the foundation Jais model, and an instruction-tuned Jais-chat variant -- with the aim of promoting research on Arabic LLMs. Available at https://huggingface.co/inception-mbzuai/jais-13b-chat",
+      "authors": "Neha Sengupta, Sunil Kumar Sahu, Bokang Jia, Satheesh Katipomu, Haonan Li, Fajri Koto, William Marshall, Gurpreet Gosal, Cynthia Liu, Zhiming Chen, Osama Mohammed Afzal, Samta Kamboj, Onkar Pandit, Rahul Pal, Lalit Pradhan, Zain Muhammad Mujahid, Massa Baali, Xudong Han, Sondos Mahmoud Bsharat, Alham Fikri Aji, Zhiqiang Shen, Zhengzhong Liu, Natalia Vassilieva, Joel Hestness, Andy Hock, Andrew Feldman, Jonathan Lee, Andrew Jackson, Hector Xuguang Ren, Preslav Nakov, Timothy Baldwin, Eric Xing",
+      "date_published": "2023-08-30",
+      "categories": [
+        "cs.CL",
+        "cs.AI",
+        "cs.LG"
+      ],
+      "primary_category": ""
+    },
+    {
+      "arxiv_id": "2307.12114",
+      "url": "http://arxiv.org/abs/2307.12114v3",
+      "pdf_url": "https://arxiv.org/pdf/2307.12114v3",
+      "title": "A Zero-shot and Few-shot Study of Instruction-Finetuned Large Language Models Applied to Clinical and Biomedical Tasks",
+      "summary": "We evaluate four state-of-the-art instruction-tuned large language models (LLMs) -- ChatGPT, Flan-T5 UL2, Tk-Instruct, and Alpaca -- on a set of 13 real-world clinical and biomedical natural language processing (NLP) tasks in English, such as named-entity recognition (NER), question-answering (QA), relation extraction (RE), etc. Our overall results demonstrate that the evaluated LLMs begin to approach performance of state-of-the-art models in zero- and few-shot scenarios for most tasks, and particularly well for the QA task, even though they have never seen examples from these tasks before. However, we observed that the classification and RE tasks perform below what can be achieved with a specifically trained model for the medical field, such as PubMedBERT. Finally, we noted that no LLM outperforms all the others on all the studied tasks, with some models being better suited for certain tasks than others.",
+      "authors": "Yanis Labrak, Mickael Rouvier, Richard Dufour",
+      "date_published": "2023-07-22",
+      "categories": [
+        "cs.CL",
+        "cs.AI",
+        "cs.LG"
+      ],
+      "primary_category": ""
+    }
+  ]
+}

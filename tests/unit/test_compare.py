@@ -130,7 +130,10 @@ class TestCompareCitationsAndStrict:
         )
         ed = self._expected_dir(tmp_path)
         proc = _run_compare(str(run_a), str(run_b), "--expected", str(ed))
-        assert proc.returncode == 0, f"non-strict mode should not fail on warnings; stderr={proc.stderr}"
+        assert proc.returncode == 0, (
+            f"non-strict mode should not fail on warnings; "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
         out = json.loads(proc.stdout)
         # Warnings must be present in the output
         assert "warnings" in out
@@ -167,8 +170,15 @@ class TestCompareCitationsAndStrict:
         )
         ed = self._expected_dir(tmp_path)
         proc = _run_compare(str(run_a), str(run_b), "--expected", str(ed), "--strict")
-        assert proc.returncode != 0, f"strict mode must fail on warnings; stdout={proc.stdout}"
-        out = json.loads(proc.stdout)
+        assert proc.returncode != 0, (
+            f"strict mode must fail on warnings; "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+        # On failure, the payload is on stderr only
+        assert proc.stdout == "", (
+            f"on failure, stdout must be silent, got: {proc.stdout!r}"
+        )
+        out = json.loads(proc.stderr)
         assert out["comparison"] == "failures"
         assert out["strict"] is True
 
@@ -200,9 +210,15 @@ class TestCompareCitationsAndStrict:
         )
         ed = self._expected_dir(tmp_path)
         proc = _run_compare(str(run_a), str(run_b), "--expected", str(ed), "--strict")
-        assert proc.returncode == 0, f"strict mode should pass when warnings are absent; stderr={proc.stderr}"
+        assert proc.returncode == 0, (
+            f"strict mode should pass when warnings are absent; "
+            f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
         out = json.loads(proc.stdout)
         assert out["comparison"] == "ok"
+        assert proc.stderr == "", (
+            f"on success, stderr must be silent, got: {proc.stderr!r}"
+        )
 
     def test_failures_always_fail_even_without_strict(self, tmp_path: Path) -> None:
         """A duplicate-URL failure must exit nonzero in both strict and non-strict modes."""
@@ -224,16 +240,43 @@ class TestCompareCitationsAndStrict:
         proc = _run_compare(str(run_a), str(run_b), "--expected", str(ed))
         # The all_ids_valid check is a failure, not a warning -> non-zero exit
         assert proc.returncode != 0, "invalid IDs must fail the comparison"
-        out = json.loads(proc.stdout)
+        # Repository-wide CLI contract: structured JSON on success goes
+        # to stdout, structured JSON on failure goes to stderr. Stream
+        # capture must match that contract.
+        assert proc.stdout == "", (
+            f"on failure, stdout must be empty, got: {proc.stdout!r}"
+        )
+        err = json.loads(proc.stderr)
         # Top-level status must be "error", not "ok", so automation can
         # distinguish a failed comparison from a passing one.
-        assert out["status"] == "error", out
-        assert out.get("error") == "comparison_failed", out
-        assert out["comparison"] == "failures"
-        flat_failures = [f for r in out["failures"] for f in r["failures"]]
+        assert err["status"] == "error", err
+        assert err.get("error") == "comparison_failed", err
+        assert err["comparison"] == "failures"
+        flat_failures = [f for r in err["failures"] for f in r["failures"]]
         assert any(f.get("check") == "all_ids_valid" for f in flat_failures), flat_failures
-        # The same payload must also appear on stderr for callers that
-        # only inspect stderr (e.g. CI logs).
-        err = json.loads(proc.stderr)
-        assert err["status"] == "error"
-        assert err["error"] == "comparison_failed"
+
+    def test_success_payload_is_only_on_stdout(self, tmp_path: Path) -> None:
+        """A passing comparison must emit JSON on stdout and nothing on stderr."""
+        run_a = tmp_path / "runA"
+        run_b = tmp_path / "runB"
+        _build_run(
+            run_a,
+            sources=["https://a.example.com/1"],
+            report_text="# Report\n\nCites [src_001].\n",
+        )
+        _build_run(
+            run_b,
+            sources=["https://a.example.com/1"],
+            report_text="# Report\n\nCites [src_001].\n",
+        )
+        ed = self._expected_dir(tmp_path)
+        proc = _run_compare(str(run_a), str(run_b), "--expected", str(ed))
+        assert proc.returncode == 0, (
+            f"unexpected failure: stdout={proc.stdout!r} stderr={proc.stderr!r}"
+        )
+        # On success, stdout has the payload and stderr is silent
+        out = json.loads(proc.stdout)
+        assert out["status"] == "ok", out
+        assert proc.stderr == "", (
+            f"on success, stderr must be silent, got: {proc.stderr!r}"
+        )
