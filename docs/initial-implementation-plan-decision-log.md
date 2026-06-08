@@ -118,3 +118,48 @@ Each entry must use this structure:
 - **Decision:** The `requests` package is not in `[project.dependencies]`. It lives only in the `brave` optional extra. The `tavily` extra is removed entirely (no Tavily provider is shipped in v0.1.0).
 - **Rationale:** The core workflow (DuckDuckGo + Crawl4AI + arXiv) does not need `requests`. Adding it to the main dependencies would inflate the install for users who never use Brave. Per the Honest Complexity principle (PHILOSOPHY.md), we only add what we use. Considered: include `requests` in main deps (rejected: unused by default), ship a `tavily` provider stub (rejected: half-implementation, document later when implemented), keep `brave` extra with `requests` only there and drop the unused `tavily` extra (chosen: minimum required deps, accurate extras).
 - **Impact:** Users running `pip install calixto-research-workspace` get a smaller install. Users who want Brave run `pip install 'calixto-research-workspace[brave]'` to add `requests`. The `[tavily]` extra is removed from the published metadata. If a future version ships a Tavily provider, the extra can be re-added.
+
+## Decision 010: Fresh install and update use separate filesystem contracts
+
+- **Date:** 2026-06-08
+- **Task:** Remaining Issues Fix Plan, Phase 1
+- **Milestone:** Post-M4 installer reliability
+- **Decision:** Fresh install and update now use different application rules, enforced by shared installer core logic. Fresh install copies the complete toolkit into a verified empty target. Update preserves protected user data and repository metadata while applying only toolkit-owned top-level entries.
+- **Rationale:** The previous shared move helper made fresh install inherit update-only protection rules, which could silently omit root toolkit files such as `config.json` in future or custom sources. The plan explicitly separates the two operations because their safety invariants differ.
+- **Impact:** The installers now document and enforce distinct fresh-install and update behavior. Tests cover both paths independently.
+
+## Decision 011: Archive roots are discovered structurally, not by repository name
+
+- **Date:** 2026-06-08
+- **Task:** Remaining Issues Fix Plan, Phase 2
+- **Milestone:** Post-M4 installer reliability
+- **Decision:** Archive extraction now validates member paths, extracts into staging, and selects the single top-level extracted directory structurally instead of searching for a `calixto-*` prefix.
+- **Rationale:** GitHub archive roots are named after the repository, so forks and custom repository names cannot safely be handled by a hard-coded `calixto-*` pattern. Structural discovery is the only repository-agnostic rule that stays correct for the default repository and for renamed forks.
+- **Impact:** Archive fallback works for arbitrary GitHub repository names as long as the archive contains exactly one top-level extracted directory. Ambiguous or malformed archives now fail before target mutation.
+
+## Decision 012: Updates use a rollback transaction plus managed-entry ownership metadata
+
+- **Date:** 2026-06-08
+- **Task:** Remaining Issues Fix Plan, Phases 1 and 3
+- **Milestone:** Post-M4 installer reliability
+- **Decision:** Updates now use `.calixto-managed-entries` as the authority for toolkit-owned top-level entries and `.calixto-update-transaction/` as the rollback mechanism for partially applied toolkit replacements.
+- **Rationale:** Without ownership metadata, the installer could not safely delete entries absent from a later release. Without a rollback transaction, a mid-update failure could leave the toolkit partially replaced. The combined approach keeps update behavior conservative for legacy installs while making modern installs recoverable.
+- **Impact:** Successful installs and updates write managed-entry metadata. Failed updates restore the previous toolkit files and leave transaction diagnostics behind for inspection.
+
+## Decision 013: Production archive downloads stay narrow and always verify TLS
+
+- **Date:** 2026-06-08
+- **Task:** Remaining Issues Fix Plan, Phase 2
+- **Milestone:** Post-M4 installer reliability
+- **Decision:** Production repository URLs are limited to `https://github.com/<owner>/<repo>` (optionally with `.git`). The old insecure TLS bypass is removed. Integration tests use explicit test-only archive URL and CA-certificate overrides guarded by `CALIXTO_TEST_MODE=1`.
+- **Rationale:** The previous implementation had broadened URL claims beyond what was actually tested and supported. The plan called for a narrow, accurate production contract and for test-only transport overrides instead of a production-facing insecure-TLS escape hatch.
+- **Impact:** Production archive fallback now always verifies TLS. Tests retain controlled flexibility without expanding the supported production surface.
+
+## Decision 014: Installer integration tests are real platform executions, not helper redefinitions
+
+- **Date:** 2026-06-08
+- **Task:** Remaining Issues Fix Plan, Phase 4
+- **Milestone:** Post-M4 installer reliability
+- **Decision:** The installer tests now execute the actual `install.sh` and `install.ps1` entrypoints from isolated checkout copies, use explicit pytest markers for Unix/Windows/archive paths, and remove the older static PowerShell helper-redefinition tests.
+- **Rationale:** The old tests proved too little: they could pass while the real installer paths still failed, and they leaked assumptions from the developer checkout into fixture expectations. Running the real installers from isolated checkouts is slower but materially more trustworthy.
+- **Impact:** CI can target required installer paths explicitly, and those tests now validate source selection, archive fallback, managed-entry behavior, rollback, interrupted-transaction recovery, and dry-run guarantees against the actual installer scripts.

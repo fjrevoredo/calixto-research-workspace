@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dev dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Run unit tests
+        run: python -m pytest -q
+      - name: Validate skills
+        run: python tests/validate_skills.py
+
+  installer-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dev dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Run Unix installer integration tests
+        env:
+          CALIXTO_ENFORCE_INSTALLER_PREREQS: "1"
+          CALIXTO_REQUIRED_MARKERS: installer_unix,installer_archive
+        run: python -m pytest tests/unit/test_install.py -m "installer_unix" --strict-markers
+
+  installer-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dev dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Run Windows installer integration tests
+        env:
+          CALIXTO_ENFORCE_INSTALLER_PREREQS: "1"
+          CALIXTO_REQUIRED_MARKERS: installer_windows,installer_archive
+        run: python -m pytest tests/unit/test_install_windows.py -m "installer_windows" --strict-markers

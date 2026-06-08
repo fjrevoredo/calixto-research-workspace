@@ -32,6 +32,7 @@ brave = [
     "requests>=2.31.0",           # Brave search uses plain HTTPS calls.
 ]
 dev = [
+    "cryptography>=45.0.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
     "ruff>=0.4.0",
@@ -68,4 +69,9 @@ ignore = ["E501"]  # line-length handled by formatter
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q --strict-markers"
+markers = [
+    "installer_archive: archive fallback installer integration tests",
+    "installer_unix: Unix installer integration tests",
+    "installer_windows: Windows installer integration tests",
+]

@@ -1,43 +1,30 @@
 #!/usr/bin/env bash
-# install.sh: One-liner installer for Calixto Research Workspace.
+# install.sh: one-liner installer for Calixto Research Workspace.
 #
-# Two modes:
-#   1. Fresh install: runs in an empty directory. Clones the repo, copies files,
-#      runs setup.sh.
-#   2. Workspace update: runs inside an existing Calixto workspace. Backs up user
-#      data (especially workspaces/), pulls latest changes, optionally runs setup.
-#
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/calixto/calixto/main/install.sh | bash
-#   curl -fsSL https://...install.sh | bash -s -- --dry-run
-#   curl -fsSL https://...install.sh | bash -s -- --version v0.1.0
-#
-# Safety:
-#   - Never deletes user data without explicit confirmation
-#   - Always prompts before making changes
-#   - Backs up workspaces/ before updating
-#   - Idempotent: safe to re-run
-#   - Supports --dry-run for testing
-#
-# This script is shebang'd for bash. It uses bash builtins (shopt, [[ ]],
-# mapfile, arrays) directly; it does NOT invoke `sh -c` to run bash
-# fragments, and it does not rely on `/bin/sh` being bash. Every command
-# that mutates state is checked for nonzero exit under `set -e`.
+# Fresh install and update intentionally use different safety rules:
+# - fresh install copies the whole toolkit into a verified empty directory
+# - update preserves user-owned data, repo metadata, and unknown files
+#   unless managed-entry metadata proves the toolkit owns them
 
 set -euo pipefail
-
-# Enable dotglob for the current shell so patterns like `mv staging/* target/`
-# include dotfiles. This is the documented bash 4+ way; we avoid the
-# historical `sh -c 'shopt -s dotglob && ...'` workaround.
 shopt -s dotglob nullglob
 
-
+TARGET_DIR="$(pwd)"
 REPO_URL="${CALIXTO_REPO_URL:-https://github.com/calixto/calixto.git}"
 REPO_BRANCH="${CALIXTO_REPO_BRANCH:-main}"
+REPO_BRANCH_EXPLICIT=0
+if [ -n "${CALIXTO_REPO_BRANCH:-}" ]; then
+    REPO_BRANCH_EXPLICIT=1
+fi
 VERSION="${CALIXTO_VERSION:-}"
-TARGET_DIR="$(pwd)"
+DRY_RUN=0
+NONINTERACTIVE=0
+SKIP_DEPS=0
+TEST_MODE="${CALIXTO_TEST_MODE:-0}"
+TEST_ARCHIVE_URL="${CALIXTO_TEST_ARCHIVE_URL:-}"
+TEST_CA_CERT="${CALIXTO_TEST_CA_CERT:-}"
+BACKUP_DIR=""
 
-# Files/dirs that signal "this is already a Calixto workspace"
 WORKSPACE_MARKERS=(
     "PHILOSOPHY.md"
     "requirements.md"
@@ -50,11 +37,6 @@ WORKSPACE_MARKERS=(
     "skills"
 )
 
-DRY_RUN=0
-NONINTERACTIVE=0
-SKIP_DEPS=0
-BACKUP_DIR=""
-
 usage() {
     cat <<'EOF'
 Calixto Research Workspace installer
@@ -63,22 +45,12 @@ Usage: install.sh [options]
 
 Options:
   --dry-run            Print what would happen without making changes
-  --non-interactive    Skip all confirmation prompts (for automation)
-  --skip-deps          Skip running setup.sh / setup.ps1 after install
-  --version TAG        Install a specific version tag (default: default branch)
-  --repo URL           Use a different repository URL
-  --branch BRANCH      Use a different branch (default: main)
+  --non-interactive    Skip confirmation prompts
+  --skip-deps          Skip running setup.sh / setup.ps1 afterwards
+  --version TAG        Install a specific release tag
+  --repo URL           Use a different GitHub repository URL
+  --branch BRANCH      Install a specific branch (default: main)
   --help               Show this help and exit
-
-Examples:
-  # Fresh install in a new directory
-  curl -fsSL https://calixto.dev/install.sh | bash
-
-  # Update an existing Calixto workspace
-  cd workspaces/my-research && curl -fsSL https://calixto.dev/install.sh | bash
-
-  # Dry run to see what would happen
-  curl -fsSL https://calixto.dev/install.sh | bash -s -- --dry-run
 EOF
 }
 
@@ -87,7 +59,6 @@ info() { printf '  -> %s\n' "$*"; }
 warn() { printf '  !! %s\n' "$*" >&2; }
 fail() { printf '  XX %s\n' "$*" >&2; exit 1; }
 
-# Parse arguments
 while [ $# -gt 0 ]; do
     case "$1" in
         --dry-run)         DRY_RUN=1; shift ;;
@@ -95,28 +66,24 @@ while [ $# -gt 0 ]; do
         --skip-deps)       SKIP_DEPS=1; shift ;;
         --version)         VERSION="$2"; shift 2 ;;
         --repo)            REPO_URL="$2"; shift 2 ;;
-        --branch)          REPO_BRANCH="$2"; shift 2 ;;
+        --branch)          REPO_BRANCH="$2"; REPO_BRANCH_EXPLICIT=1; shift 2 ;;
         --help|-h)         usage; exit 0 ;;
         *)                 warn "Unknown argument: $1"; usage; exit 1 ;;
     esac
 done
 
-run() {
-    if [ "$DRY_RUN" -eq 1 ]; then
-        printf '   [dry-run] %s\n' "$*"
-    else
-        "$@"
-    fi
-}
+command_exists() { command -v "$1" >/dev/null 2>&1; }
 
-is_workspace() {
-    local marker
-    for marker in "${WORKSPACE_MARKERS[@]}"; do
-        if [ ! -e "$TARGET_DIR/$marker" ]; then
-            return 1
-        fi
-    done
-    return 0
+python_bin() {
+    if command_exists python3; then
+        printf '%s\n' python3
+        return 0
+    fi
+    if command_exists python; then
+        printf '%s\n' python
+        return 0
+    fi
+    fail "Python 3.11+ is required to run the installer."
 }
 
 confirm() {
@@ -136,247 +103,306 @@ confirm() {
     esac
 }
 
-command_exists() { command -v "$1" >/dev/null 2>&1; }
+is_workspace() {
+    local marker
+    for marker in "${WORKSPACE_MARKERS[@]}"; do
+        if [ ! -e "$TARGET_DIR/$marker" ]; then
+            return 1
+        fi
+    done
+    return 0
+}
 
-# Entries that must NEVER be replaced during a toolkit update. These
-# are either user-owned (workspaces, notes, ...) or otherwise precious
-# (.git would clobber the developer's repo metadata). The list is
-# evaluated against the basename of each staged entry.
-# Entries that must NEVER be replaced when moving staged content
-# into a target directory. These are:
-#   - User-owned data (workspaces, notes, outputs)
-#   - Repository metadata (.git) that would lose its history
-#   - Toolkit-owned config (config.json) that may carry user overrides
-#
-# .gitignore is NOT protected: it is toolkit configuration that
-# must be installed and updated by every fresh install and update,
-# so users always get the latest ignore rules for generated
-# artifacts (workspaces/, .venv/, etc.). If a user wants to
-# customize the ignore rules, they should commit a separate file
-# (e.g., .gitignore.local) and reference it from .gitignore, or
-# they can fork the toolkit.
-TOOLKIT_PROTECTED_NAMES=(
-    "workspaces"
-    "notes"
-    "outputs"
-    ".git"
-    "config.json"
-)
+selected_ref() {
+    if [ -n "$VERSION" ]; then
+        printf '%s\n' "$VERSION"
+    else
+        printf '%s\n' "$REPO_BRANCH"
+    fi
+}
 
-# move_staging_contents: move every entry from $1 into $2 (including dotfiles).
-# Uses nullglob + dotglob (enabled at script top) to avoid subshells.
-#
-# This function is used by both the fresh-install and update paths.
-# The fresh path moves into an empty directory, so the only concern is
-# the toolkit itself. The update path moves into a directory that may
-# already contain user data, so we must NOT clobber:
-#   - .git (would replace the developer's repo metadata)
-#   - workspaces/, notes/, outputs/ (user-owned data)
-#   - config.json and *.local (user config; backed up & restored below)
-# For toolkit-owned entries that DO collide (scripts/, providers/, etc.),
-# we replace the target's contents before the move so non-empty
-# directories do not abort the update with `mv: cannot overwrite`.
-move_staging_contents() {
-    local src="$1"
-    local dst="$2"
-    if [ ! -d "$src" ]; then
+validate_selector_contract() {
+    if [ -n "$VERSION" ] && [ "$REPO_BRANCH_EXPLICIT" -eq 1 ]; then
+        fail "Specify either --branch or --version, not both."
+    fi
+    if [ -n "${CALIXTO_TEST_FAIL_AFTER_REPLACEMENTS:-}" ] && [ "$TEST_MODE" != "1" ]; then
+        fail "CALIXTO_TEST_FAIL_AFTER_REPLACEMENTS requires CALIXTO_TEST_MODE=1."
+    fi
+    if [ -n "$TEST_ARCHIVE_URL" ] && [ "$TEST_MODE" != "1" ]; then
+        fail "CALIXTO_TEST_ARCHIVE_URL requires CALIXTO_TEST_MODE=1."
+    fi
+    if [ -n "$TEST_CA_CERT" ] && [ "$TEST_MODE" != "1" ]; then
+        fail "CALIXTO_TEST_CA_CERT requires CALIXTO_TEST_MODE=1."
+    fi
+}
+
+normalize_repo_url() {
+    case "$1" in
+        https://github.com/*/*|https://github.com/*/*.git|https://github.com/*/*/)
+            printf '%s\n' "${1%/}"
+            ;;
+        *)
+            fail "Repo URL must be https://github.com/<owner>/<repo> (optionally ending in .git)."
+            ;;
+    esac
+}
+
+build_archive_base_url() {
+    local repo
+    repo="$(normalize_repo_url "$REPO_URL")"
+    repo="${repo%.git}"
+    printf '%s\n' "$repo"
+}
+
+build_source_url() {
+    local ref
+    ref="$(selected_ref)"
+    if [ -n "$TEST_ARCHIVE_URL" ]; then
+        printf 'tarball:%s\n' "$TEST_ARCHIVE_URL"
         return 0
     fi
-    local entry name target is_protected
-    for entry in "$src"/* "$src"/.[!.]*; do
-        [ -e "$entry" ] || continue
-        name="$(basename "$entry")"
-        # Skip protected names. This handles both the fresh-install
-        # case (no collisions possible anyway) and the update case
-        # (the protected names are exactly the ones we want to
-        # preserve).
-        is_protected=0
-        for protected in "${TOOLKIT_PROTECTED_NAMES[@]}"; do
-            if [ "$name" = "$protected" ]; then
-                is_protected=1
-                break
-            fi
-        done
-        if [ "$is_protected" -eq 1 ]; then
-            continue
-        fi
-        target="$dst/$name"
-        # If the target is a non-empty directory, recursively remove
-        # its contents first. This makes the subsequent mv atomic per
-        # top-level entry: a collision with a directory full of files
-        # from an older toolkit version is resolved by replacing the
-        # whole directory. Individual file collisions are overwritten
-        # by `mv -f`.
-        if [ -d "$target" ]; then
-            rm -rf "$target"
-        fi
-        mv -f "$entry" "$dst/"
-    done
-}
-
-# Decide the source we will fetch the repo from
-build_source_url() {
-    # Prefer git clone if git is available. Fall back to tarball download.
     if command_exists git; then
-        if [ -n "$VERSION" ]; then
-            echo "git:$REPO_URL:$VERSION"
+        if [ "$TEST_MODE" = "1" ]; then
+            printf 'git:%s:%s\n' "$REPO_URL" "$ref"
         else
-            echo "git:$REPO_URL:$REPO_BRANCH"
+            printf 'git:%s:%s\n' "$(normalize_repo_url "$REPO_URL")" "$ref"
         fi
+        return 0
+    fi
+    if [ -n "$VERSION" ]; then
+        printf 'tarball:%s/archive/refs/tags/%s.tar.gz\n' \
+            "$(build_archive_base_url)" "$VERSION"
     else
-        # Tarball: convert repo URL to codeload tarball URL. The path
-        # under /archive/ depends on the ref kind:
-        #   - refs/heads/<branch>  for branches (the default)
-        #   - refs/tags/<tag>      for tags (e.g. v1.2.3)
-        # The previous version always built refs/heads/<version>,
-        # which silently 404'd for tagged-version installs whenever
-        # git was unavailable. The URL kind is therefore derived
-        # from the *source* flag, not from the ref string itself:
-        # we can't tell a tag from a branch by name alone.
-        local tarball_base
-        # We accept any https URL whose path looks like
-        # /<org>/<repo>, including github.com and self-hosted
-        # GitHub Enterprise instances. The strict github.com
-        # check we used to have here blocked self-hosted and our
-        # own integration tests (which point at a local HTTP
-        # server with a non-github.com URL).
-        case "$REPO_URL" in
-            https://*/*/*)
-                tarball_base="${REPO_URL%.git}/archive"
-                tarball_base="${tarball_base%/}"
-                ;;
-            *) fail "Cannot derive tarball URL from: $REPO_URL. URL must look like https://host/org/repo (no .git suffix)." ;;
-        esac
-        if [ -n "$VERSION" ]; then
-            # CALIXTO_VERSION is treated as a tag. Tags are version
-            # pins like v0.1.0, not branch names.
-            echo "tarball:${tarball_base}/refs/tags/${VERSION}.tar.gz"
-        else
-            echo "tarball:${tarball_base}/refs/heads/${REPO_BRANCH}.tar.gz"
-        fi
+        printf 'tarball:%s/archive/refs/heads/%s.tar.gz\n' \
+            "$(build_archive_base_url)" "$REPO_BRANCH"
     fi
 }
 
-# =================================================================
-# Mode 1: Fresh install (current directory is empty)
-# =================================================================
+copy_installer_core() {
+    local source_root="$1"
+    local staging_dir="$2"
+    local core_src="$source_root/scripts/installer_core.py"
+    local core_copy="$staging_dir/installer-core.py"
+    [ -f "$core_src" ] || fail "Downloaded source is missing scripts/installer_core.py."
+    cp "$core_src" "$core_copy"
+    printf '%s\n' "$core_copy"
+}
+
+run_installer_core() {
+    local core_script="$1"
+    shift
+    local python
+    python="$(python_bin)"
+    "$python" "$core_script" "$@"
+}
+
+extract_archive_source() {
+    local url="$1"
+    local staging_dir="$2"
+    local archive_path="$staging_dir/repo.tar.gz"
+    local python
+    python="$(python_bin)"
+    local curl_args=(-fsSL)
+    if [ -n "$TEST_CA_CERT" ]; then
+        curl_args+=(--cacert "$TEST_CA_CERT")
+    fi
+    curl "${curl_args[@]}" "$url" -o "$archive_path"
+    "$python" - "$archive_path" "$staging_dir" <<'PY'
+import os
+import posixpath
+import re
+import sys
+import tarfile
+from pathlib import Path
+
+archive = Path(sys.argv[1])
+staging = Path(sys.argv[2]).resolve(strict=False)
+
+def fail(message: str) -> None:
+    print(message, file=sys.stderr)
+    raise SystemExit(1)
+
+def normalize_member(name: str) -> str:
+    if not name:
+        fail("Archive contains an empty member name.")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+        fail(f"Archive member contains control characters: {name!r}")
+    normalized = posixpath.normpath(name)
+    if normalized in {".", ""}:
+        fail(f"Archive member is not a real path: {name!r}")
+    if normalized.startswith("/") or normalized.startswith("\\"):
+        fail(f"Archive member uses an absolute path: {name!r}")
+    if normalized == ".." or normalized.startswith("../"):
+        fail(f"Archive member escapes staging via '..': {name!r}")
+    if re.match(r"^[A-Za-z]:", normalized):
+        fail(f"Archive member uses a drive-qualified path: {name!r}")
+    return normalized
+
+with tarfile.open(archive, "r:gz") as tf:
+    members = tf.getmembers()
+    if not members:
+        fail("Archive is empty.")
+    for member in members:
+        normalized = normalize_member(member.name)
+        if member.issym() or member.islnk():
+            link_target = member.linkname or ""
+            if not link_target:
+                fail(f"Archive link has no target: {member.name!r}")
+            normalized_target = posixpath.normpath(
+                posixpath.join(posixpath.dirname(normalized), link_target)
+            )
+            if normalized_target.startswith("/") or normalized_target.startswith("\\"):
+                fail(
+                    f"Archive link escapes staging via absolute target: "
+                    f"{member.name!r} -> {link_target!r}"
+                )
+            if normalized_target == ".." or normalized_target.startswith("../"):
+                fail(
+                    f"Archive link escapes staging: "
+                    f"{member.name!r} -> {link_target!r}"
+                )
+            if re.match(r"^[A-Za-z]:", normalized_target):
+                fail(
+                    f"Archive link uses a drive-qualified target: "
+                    f"{member.name!r} -> {link_target!r}"
+                )
+    tf.extractall(staging)
+
+candidates = []
+for child in staging.iterdir():
+    if child.name == archive.name:
+        continue
+    if child.is_dir():
+        resolved = child.resolve(strict=False)
+        try:
+            resolved.relative_to(staging)
+        except ValueError:
+            fail(f"Extracted directory escapes staging: {child}")
+        candidates.append(resolved)
+
+if len(candidates) != 1:
+    fail(
+        "Archive extraction must produce exactly one top-level directory; "
+        f"found {len(candidates)} candidates."
+    )
+
+print(str(candidates[0]))
+PY
+}
+
+cleanup_path() {
+    local path="$1"
+    [ -e "$path" ] || return 0
+    rm -rf "$path"
+}
+
+make_temp_staging_dir() {
+    mktemp -d "${TMPDIR:-/tmp}/calixto-install.XXXXXX"
+}
+
+run_setup_if_requested() {
+    local setup_script="$1"
+    local context="$2"
+    if [ "$SKIP_DEPS" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+        return 0
+    fi
+    chmod +x "$setup_script" 2>/dev/null || true
+    if [ ! -x "$setup_script" ]; then
+        return 0
+    fi
+    log "Running setup.sh"
+    if ! (cd "$TARGET_DIR" && bash "$setup_script"); then
+        fail "setup.sh failed during $context. Toolkit files are present, but the environment is not ready."
+    fi
+}
+
 fresh_install() {
     log "Mode: fresh install"
     info "Target directory: $TARGET_DIR"
-    info "Repository: $REPO_URL (branch: $REPO_BRANCH${VERSION:+, version: $VERSION})"
+    info "Repository: $REPO_URL"
 
-    # Safety: refuse to install into a non-empty directory
     if [ -n "$(ls -A "$TARGET_DIR" 2>/dev/null)" ]; then
-        fail "Target directory is not empty. Use a new directory for fresh install, or run inside an existing Calixto workspace for update mode."
+        fail "Target directory is not empty. Use a new directory for fresh install."
     fi
 
-    confirm "This will clone Calixto Research Workspace into '$TARGET_DIR'. Continue?" || {
+    confirm "This will install Calixto Research Workspace into '$TARGET_DIR'. Continue?" || {
         info "Installation cancelled by user."
         exit 0
     }
 
-    local src; src="$(build_source_url)"
+    local src
+    src="$(build_source_url)"
     info "Source: $src"
 
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '   [dry-run] would fetch source into a staging directory and apply a fresh install\n'
+        exit 0
+    fi
+
+    local staging
+    staging="$(make_temp_staging_dir)"
+
+    local source_root=""
     case "$src" in
         git:*)
             local url="${src#git:}"
             url="${url%:*}"
             local ref="${src##*:}"
-            run git clone --depth 1 --branch "$ref" "$url" "$TARGET_DIR/.calixto-tmp"
-            # Move cloned contents (including dotfiles) up to TARGET_DIR.
-            # This is a bash-native loop; no `sh -c` indirection, no `|| true`
-            # suppression. If the staging dir is missing the loop is a no-op,
-            # and the marker check below will catch the empty install.
-            move_staging_contents "$TARGET_DIR/.calixto-tmp" "$TARGET_DIR"
+            git clone --depth 1 --branch "$ref" "$url" "$staging/repo"
+            source_root="$staging/repo"
             ;;
         tarball:*)
             local url="${src#tarball:}"
-            # CALIXTO_INSECURE_TLS=1 skips TLS certificate verification
-            # for the tarball host. Use only for self-signed hosts in
-            # air-gapped environments; production usage against
-            # github.com does not need it.
-            if [ "${CALIXTO_INSECURE_TLS:-0}" = "1" ]; then
-                run curl -fsSLk "$url" -o "$TARGET_DIR/.calixto.tar.gz"
-            else
-                run curl -fsSL "$url" -o "$TARGET_DIR/.calixto.tar.gz"
-            fi
-            run tar -xzf "$TARGET_DIR/.calixto.tar.gz" -C "$TARGET_DIR"
-            # Tarballs extract into <repo>-<ref>/ directory under the
-            # target. We must search under $TARGET_DIR explicitly: the
-            # installer may be invoked from a different cwd (e.g.
-            # `curl ... | bash` runs in /tmp or similar), and a
-            # bare `calixto-*/` glob is relative to the process cwd,
-            # not the install target. Anchoring the search to
-            # $TARGET_DIR also matches the update path, which already
-            # searches under its staging directory.
-            local extracted_dir=""
-            for entry in "$TARGET_DIR"/calixto-*/; do
-                [ -d "$entry" ] || continue
-                extracted_dir="$entry"
-                break
-            done
-            if [ -z "$extracted_dir" ]; then
-                fail "Tarball extraction did not produce an expected calixto-* directory under $TARGET_DIR."
-            fi
-            move_staging_contents "$extracted_dir" "$TARGET_DIR"
-            # Cleanup tarball artifacts
-            run rm -rf "$TARGET_DIR/calixto-"*
-            run rm -f "$TARGET_DIR/.calixto.tar.gz"
+            source_root="$(extract_archive_source "$url" "$staging")"
+            ;;
+        *)
+            cleanup_path "$staging"
+            fail "Unknown source mode: $src"
             ;;
     esac
 
-    if [ "$DRY_RUN" -eq 0 ]; then
-        # Verify the install actually populated the target before cleaning up.
-        # If required workspace markers are missing, fail and preserve the
-        # staging directory so the user can inspect it.
-        local missing=()
-        local marker
-        for marker in "${WORKSPACE_MARKERS[@]}"; do
-            if [ ! -e "$TARGET_DIR/$marker" ]; then
-                missing+=("$marker")
-            fi
-        done
-        if [ ${#missing[@]} -gt 0 ]; then
-            warn "Fresh install appears incomplete. Missing markers: ${missing[*]}"
-            warn "Staging preserved at $TARGET_DIR/.calixto-tmp for inspection."
-            fail "Fresh install did not produce a valid Calixto workspace."
-        fi
-        # All markers present: clean up staging and any leftover tarball
-        [ -d "$TARGET_DIR/.calixto-tmp" ] && rm -rf "$TARGET_DIR/.calixto-tmp"
-        [ -d "$TARGET_DIR/calixto-"* ] && rm -rf "$TARGET_DIR/calixto-"*
-        [ -f "$TARGET_DIR/.calixto.tar.gz" ] && rm -f "$TARGET_DIR/.calixto.tar.gz"
+    local core_script
+    core_script="$(copy_installer_core "$source_root" "$staging")"
+    if ! run_installer_core \
+        "$core_script" \
+        apply-fresh \
+        --source-root "$source_root" \
+        --target-dir "$TARGET_DIR"
+    then
+        warn "Fresh install failed. Staging preserved at $staging for inspection."
+        exit 1
     fi
 
-    if [ "$SKIP_DEPS" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-        log "Running setup.sh to install dependencies"
-        chmod +x "$TARGET_DIR/setup.sh" 2>/dev/null || true
-        if [ -x "$TARGET_DIR/setup.sh" ]; then
-            # Track whether setup.sh succeeded. The fresh-install
-            # contract is "after this script exits 0, the environment
-            # is usable"; a failed setup must not leave the user with
-            # a "Fresh install complete" message.
-            local setup_ok=0
-            (cd "$TARGET_DIR" && bash ./setup.sh) && setup_ok=1
-            if [ "$setup_ok" -ne 1 ]; then
-                fail "setup.sh failed. Toolkit files are installed at $TARGET_DIR, but the Python environment is not usable. Re-run $TARGET_DIR/setup.sh manually to diagnose, or re-run this installer with --skip-deps to install files without setting up the environment."
-            fi
-        fi
-    fi
+    cleanup_path "$staging"
+    run_setup_if_requested "$TARGET_DIR/setup.sh" "fresh install"
 
     log "Fresh install complete"
     info "To start: cd $TARGET_DIR && python scripts/init_workspace.py my-research"
 }
 
-# =================================================================
-# Mode 2: Workspace update (current directory is already a Calixto workspace)
-# =================================================================
+backup_user_data() {
+    local timestamp
+    timestamp="$(date +%Y%m%d-%H%M%S)"
+    BACKUP_DIR="$TARGET_DIR/.calixto-backup-$timestamp"
+    info "Backing up user data to $BACKUP_DIR"
+    mkdir -p "$BACKUP_DIR"
+    local item
+    for item in workspaces notes outputs config.json; do
+        if [ -e "$TARGET_DIR/$item" ]; then
+            cp -r "$TARGET_DIR/$item" "$BACKUP_DIR/"
+        fi
+    done
+    for entry in "$TARGET_DIR"/*.local; do
+        [ -e "$entry" ] || continue
+        cp "$entry" "$BACKUP_DIR/"
+    done
+}
+
 update_workspace() {
     log "Mode: workspace update"
     info "Target directory: $TARGET_DIR"
-    info "Repository: $REPO_URL (branch: $REPO_BRANCH${VERSION:+, version: $VERSION})"
+    info "Repository: $REPO_URL"
 
-    # Verify compatibility: all required files/dirs must be present
     local missing=()
     local marker
     for marker in "${WORKSPACE_MARKERS[@]}"; do
@@ -384,105 +410,75 @@ update_workspace() {
             missing+=("$marker")
         fi
     done
-    if [ ${#missing[@]} -gt 0 ]; then
-        fail "Directory looks like a partial Calixto workspace. Missing: ${missing[*]}. Run from a complete Calixto workspace, or use a new directory for fresh install."
+    if [ "${#missing[@]}" -gt 0 ]; then
+        fail "Directory looks like a partial Calixto workspace. Missing: ${missing[*]}"
     fi
 
-    confirm "This will update Calixto Research Workspace in '$TARGET_DIR'. User data (workspaces/, notes/, outputs/, config files) will be preserved. Continue?" || {
+    confirm "This will update Calixto Research Workspace in '$TARGET_DIR'. Continue?" || {
         info "Update cancelled by user."
         exit 0
     }
 
-    # Backup user data. We back up the same set on every platform:
-    # workspaces/, notes/, outputs/, config.json, and any *.local override
-    # files in the root. These are all "user-owned"; toolkit files
-    # (templates/, scripts/, etc.) are not.
-    local timestamp; timestamp="$(date +%Y%m%d-%H%M%S)"
-    BACKUP_DIR="$TARGET_DIR/.calixto-backup-$timestamp"
-    info "Backing up user data to $BACKUP_DIR"
-    run mkdir -p "$BACKUP_DIR"
-    for item in workspaces notes outputs config.json; do
-        if [ -e "$TARGET_DIR/$item" ]; then
-            run cp -r "$TARGET_DIR/$item" "$BACKUP_DIR/"
-        fi
-    done
-    # Also back up any *.local config overrides. nullglob turns the
-    # pattern into the empty list when no match; the for loop is then a
-    # no-op (no `|| true` needed because there is no failing command).
-    for entry in "$TARGET_DIR"/*.local; do
-        [ -e "$entry" ] || continue
-        run cp "$entry" "$BACKUP_DIR/"
-    done
-
-    # Fetch the latest source
-    local src; src="$(build_source_url)"
+    local src
+    src="$(build_source_url)"
     info "Source: $src"
-    local staging="$TARGET_DIR/.calixto-update"
-    run rm -rf "$staging"
-    run mkdir -p "$staging"
 
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '   [dry-run] would fetch source, validate it, create a backup, and apply an update transaction\n'
+        exit 0
+    fi
+
+    local staging
+    staging="$(make_temp_staging_dir)"
+
+    local source_root=""
     case "$src" in
         git:*)
-            local url="${src#git:}"; url="${url%:*}"
+            local url="${src#git:}"
+            url="${url%:*}"
             local ref="${src##*:}"
-            run git clone --depth 1 --branch "$ref" "$url" "$staging/repo"
-            move_staging_contents "$staging/repo" "$TARGET_DIR"
+            git clone --depth 1 --branch "$ref" "$url" "$staging/repo"
+            source_root="$staging/repo"
             ;;
         tarball:*)
             local url="${src#tarball:}"
-            if [ "${CALIXTO_INSECURE_TLS:-0}" = "1" ]; then
-                run curl -fsSLk "$url" -o "$staging/repo.tar.gz"
-            else
-                run curl -fsSL "$url" -o "$staging/repo.tar.gz"
-            fi
-            run tar -xzf "$staging/repo.tar.gz" -C "$staging"
-            local extracted_dir=""
-            for entry in "$staging"/calixto-*/; do
-                [ -d "$entry" ] || continue
-                extracted_dir="$entry"
-                break
-            done
-            if [ -z "$extracted_dir" ]; then
-                fail "Tarball extraction did not produce an expected calixto-* directory."
-            fi
-            move_staging_contents "$extracted_dir" "$TARGET_DIR"
+            source_root="$(extract_archive_source "$url" "$staging")"
+            ;;
+        *)
+            cleanup_path "$staging"
+            fail "Unknown source mode: $src"
             ;;
     esac
 
-    # Restore user data over the freshly installed files. config.json
-    # and *.local overrides are restored along with the data dirs so
-    # user-owned config survives the update.
-    info "Restoring user data from backup"
-    for item in workspaces notes outputs config.json; do
-        if [ -e "$BACKUP_DIR/$item" ]; then
-            run rm -rf "$TARGET_DIR/$item"
-            run cp -r "$BACKUP_DIR/$item" "$TARGET_DIR/"
-        fi
-    done
-    for entry in "$BACKUP_DIR"/*.local; do
-        [ -e "$entry" ] || continue
-        run cp "$entry" "$TARGET_DIR/"
-    done
-    # Note: templates/workspace is part of the toolkit, not user data
+    local core_script
+    core_script="$(copy_installer_core "$source_root" "$staging")"
 
-    # Cleanup staging
-    if [ "$DRY_RUN" -eq 0 ]; then
-        rm -rf "$staging"
+    if ! run_installer_core \
+        "$core_script" \
+        recover-transaction \
+        --target-dir "$TARGET_DIR"
+    then
+        cleanup_path "$staging"
+        exit 1
     fi
 
-    if [ "$SKIP_DEPS" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+    backup_user_data
+
+    if ! run_installer_core \
+        "$core_script" \
+        apply-update \
+        --source-root "$source_root" \
+        --target-dir "$TARGET_DIR"
+    then
+        cleanup_path "$staging"
+        exit 1
+    fi
+
+    cleanup_path "$staging"
+
+    if [ "$SKIP_DEPS" -eq 0 ]; then
         if confirm "Run setup.sh now to update dependencies?"; then
-            log "Running setup.sh"
-            chmod +x "$TARGET_DIR/setup.sh" 2>/dev/null || true
-            # Track setup success: a failed setup must not leave the
-            # user with "Update complete". The user's data is safe
-            # (restored from $BACKUP_DIR) but the environment is not
-            # in a known-good state.
-            local setup_ok=0
-            (cd "$TARGET_DIR" && bash ./setup.sh) && setup_ok=1
-            if [ "$setup_ok" -ne 1 ]; then
-                fail "setup.sh failed during update. Toolkit files were updated and user data restored from $BACKUP_DIR, but the Python environment is not usable. Re-run $TARGET_DIR/setup.sh manually to diagnose, or re-run this installer with --skip-deps to apply files without touching the environment."
-            fi
+            run_setup_if_requested "$TARGET_DIR/setup.sh" "update"
         fi
     fi
 
@@ -491,9 +487,8 @@ update_workspace() {
     info "To start: cd $TARGET_DIR && python scripts/init_workspace.py my-research"
 }
 
-# =================================================================
-# Main
-# =================================================================
+validate_selector_contract
+
 log "Calixto Research Workspace installer"
 info "Target: $TARGET_DIR"
 

@@ -26,7 +26,16 @@ curl -fsSL https://raw.githubusercontent.com/calixto/calixto/main/install.sh | b
 irm https://raw.githubusercontent.com/calixto/calixto/main/install.ps1 | iex
 ```
 
-Update an existing Calixto workspace in the same way. The installer detects whether the directory is already a Calixto workspace and switches to update mode automatically. It will never delete user data without confirmation and will back up the `workspaces/` directory before updating.
+Update an existing Calixto workspace in the same way. The installer detects whether the directory is already a Calixto workspace and switches to update mode automatically. It preserves user-owned data, keeps a timestamped backup copy, and uses a rollback transaction for toolkit files during updates.
+
+Installer details are documented in [`docs/installer.md`](./docs/installer.md), including:
+
+- branch vs. tag/version selection
+- supported custom GitHub repository URLs
+- git-to-archive fallback behavior
+- managed-entry ownership metadata
+- transactional update rollback and interrupted-transaction recovery
+- TLS verification and test-only archive overrides
 
 ## Two Modes of Operation
 
