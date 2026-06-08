@@ -18,8 +18,19 @@
 #   - Backs up workspaces/ before updating
 #   - Idempotent: safe to re-run
 #   - Supports --dry-run for testing
+#
+# This script is shebang'd for bash. It uses bash builtins (shopt, [[ ]],
+# mapfile, arrays) directly; it does NOT invoke `sh -c` to run bash
+# fragments, and it does not rely on `/bin/sh` being bash. Every command
+# that mutates state is checked for nonzero exit under `set -e`.
 
 set -euo pipefail
+
+# Enable dotglob for the current shell so patterns like `mv staging/* target/`
+# include dotfiles. This is the documented bash 4+ way; we avoid the
+# historical `sh -c 'shopt -s dotglob && ...'` workaround.
+shopt -s dotglob nullglob
+
 
 REPO_URL="${CALIXTO_REPO_URL:-https://github.com/calixto/calixto.git}"
 REPO_BRANCH="${CALIXTO_REPO_BRANCH:-main}"
@@ -127,6 +138,25 @@ confirm() {
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
 
+# move_staging_contents: move every entry from $1 into $2 (including dotfiles).
+# Uses nullglob + dotglob (enabled at script top) to avoid subshells.
+move_staging_contents() {
+    local src="$1"
+    local dst="$2"
+    if [ ! -d "$src" ]; then
+        return 0
+    fi
+    # Iterate entries, including hidden ones. nullglob turns "no match" into
+    # the empty list rather than a literal pattern.
+    local entry
+    for entry in "$src"/* "$src"/.[!.]*; do
+        [ -e "$entry" ] || continue
+        # -f to overwrite existing files, since a previous partial install
+        # may have left them in place.
+        mv -f "$entry" "$dst/"
+    done
+}
+
 # Decide the source we will fetch the repo from
 build_source_url() {
     # Prefer git clone if git is available. Fall back to tarball download.
@@ -178,17 +208,31 @@ fresh_install() {
             url="${url%:*}"
             local ref="${src##*:}"
             run git clone --depth 1 --branch "$ref" "$url" "$TARGET_DIR/.calixto-tmp"
-            # Move the cloned contents (including dotfiles) up to TARGET_DIR
-            run sh -c "shopt -s dotglob && mv $TARGET_DIR/.calixto-tmp/* $TARGET_DIR/ 2>/dev/null || true"
-            run sh -c "shopt -s dotglob && mv $TARGET_DIR/.calixto-tmp/.[!.]* $TARGET_DIR/ 2>/dev/null || true"
+            # Move cloned contents (including dotfiles) up to TARGET_DIR.
+            # This is a bash-native loop; no `sh -c` indirection, no `|| true`
+            # suppression. If the staging dir is missing the loop is a no-op,
+            # and the marker check below will catch the empty install.
+            move_staging_contents "$TARGET_DIR/.calixto-tmp" "$TARGET_DIR"
             ;;
         tarball:*)
             local url="${src#tarball:}"
             run curl -fsSL "$url" -o "$TARGET_DIR/.calixto.tar.gz"
             run tar -xzf "$TARGET_DIR/.calixto.tar.gz" -C "$TARGET_DIR"
-            # Tarballs extract into <repo>-<ref> directory; move contents up
-            run sh -c "shopt -s dotglob && mv $TARGET_DIR/calixto-*/* $TARGET_DIR/ 2>/dev/null || true"
-            run sh -c "shopt -s dotglob && mv $TARGET_DIR/calixto-*/.[!.]* $TARGET_DIR/ 2>/dev/null || true"
+            # Tarballs extract into <repo>-<ref>/ directory. Find it and
+            # move its contents up.
+            local extracted_dir=""
+            # The pattern `calixto-*/` matches a single directory. If
+            # multiple exist (shouldn't happen), the first wins.
+            for entry in calixto-*/; do
+                [ -d "$entry" ] || continue
+                extracted_dir="$entry"
+                break
+            done
+            if [ -z "$extracted_dir" ]; then
+                fail "Tarball extraction did not produce an expected calixto-* directory."
+            fi
+            move_staging_contents "$TARGET_DIR/$extracted_dir" "$TARGET_DIR"
+            # Cleanup tarball artifacts
             run rm -rf "$TARGET_DIR/calixto-"*
             run rm -f "$TARGET_DIR/.calixto.tar.gz"
             ;;
@@ -220,7 +264,15 @@ fresh_install() {
         log "Running setup.sh to install dependencies"
         chmod +x "$TARGET_DIR/setup.sh" 2>/dev/null || true
         if [ -x "$TARGET_DIR/setup.sh" ]; then
-            (cd "$TARGET_DIR" && bash ./setup.sh) || warn "setup.sh had issues. Re-run with ./setup.sh to retry."
+            # Track whether setup.sh succeeded. The fresh-install
+            # contract is "after this script exits 0, the environment
+            # is usable"; a failed setup must not leave the user with
+            # a "Fresh install complete" message.
+            local setup_ok=0
+            (cd "$TARGET_DIR" && bash ./setup.sh) && setup_ok=1
+            if [ "$setup_ok" -ne 1 ]; then
+                fail "setup.sh failed. Toolkit files are installed at $TARGET_DIR, but the Python environment is not usable. Re-run $TARGET_DIR/setup.sh manually to diagnose, or re-run this installer with --skip-deps to install files without setting up the environment."
+            fi
         fi
     fi
 
@@ -253,7 +305,10 @@ update_workspace() {
         exit 0
     }
 
-    # Backup user data
+    # Backup user data. We back up the same set on every platform:
+    # workspaces/, notes/, outputs/, config.json, and any *.local override
+    # files in the root. These are all "user-owned"; toolkit files
+    # (templates/, scripts/, etc.) are not.
     local timestamp; timestamp="$(date +%Y%m%d-%H%M%S)"
     BACKUP_DIR="$TARGET_DIR/.calixto-backup-$timestamp"
     info "Backing up user data to $BACKUP_DIR"
@@ -263,9 +318,13 @@ update_workspace() {
             run cp -r "$TARGET_DIR/$item" "$BACKUP_DIR/"
         fi
     done
-    # templates/workspace is toolkit-owned, not user data; skip
-    # Also back up any *.local config overrides
-    run sh -c "cp $TARGET_DIR/*.local $BACKUP_DIR/ 2>/dev/null || true"
+    # Also back up any *.local config overrides. nullglob turns the
+    # pattern into the empty list when no match; the for loop is then a
+    # no-op (no `|| true` needed because there is no failing command).
+    for entry in "$TARGET_DIR"/*.local; do
+        [ -e "$entry" ] || continue
+        run cp "$entry" "$BACKUP_DIR/"
+    done
 
     # Fetch the latest source
     local src; src="$(build_source_url)"
@@ -279,23 +338,38 @@ update_workspace() {
             local url="${src#git:}"; url="${url%:*}"
             local ref="${src##*:}"
             run git clone --depth 1 --branch "$ref" "$url" "$staging/repo"
-            run sh -c "shopt -s dotglob && cp -r $staging/repo/* $TARGET_DIR/ 2>/dev/null || true"
+            move_staging_contents "$staging/repo" "$TARGET_DIR"
             ;;
         tarball:*)
             local url="${src#tarball:}"
             run curl -fsSL "$url" -o "$staging/repo.tar.gz"
             run tar -xzf "$staging/repo.tar.gz" -C "$staging"
-            run sh -c "shopt -s dotglob && cp -r $staging/calixto-*/* $TARGET_DIR/ 2>/dev/null || true"
+            local extracted_dir=""
+            for entry in "$staging"/calixto-*/; do
+                [ -d "$entry" ] || continue
+                extracted_dir="$entry"
+                break
+            done
+            if [ -z "$extracted_dir" ]; then
+                fail "Tarball extraction did not produce an expected calixto-* directory."
+            fi
+            move_staging_contents "$extracted_dir" "$TARGET_DIR"
             ;;
     esac
 
-    # Restore user data over the freshly installed files
+    # Restore user data over the freshly installed files. config.json
+    # and *.local overrides are restored along with the data dirs so
+    # user-owned config survives the update.
     info "Restoring user data from backup"
-    for item in workspaces notes outputs; do
+    for item in workspaces notes outputs config.json; do
         if [ -e "$BACKUP_DIR/$item" ]; then
             run rm -rf "$TARGET_DIR/$item"
             run cp -r "$BACKUP_DIR/$item" "$TARGET_DIR/"
         fi
+    done
+    for entry in "$BACKUP_DIR"/*.local; do
+        [ -e "$entry" ] || continue
+        run cp "$entry" "$TARGET_DIR/"
     done
     # Note: templates/workspace is part of the toolkit, not user data
 
@@ -308,7 +382,15 @@ update_workspace() {
         if confirm "Run setup.sh now to update dependencies?"; then
             log "Running setup.sh"
             chmod +x "$TARGET_DIR/setup.sh" 2>/dev/null || true
-            (cd "$TARGET_DIR" && bash ./setup.sh) || warn "setup.sh had issues. Re-run with ./setup.sh to retry."
+            # Track setup success: a failed setup must not leave the
+            # user with "Update complete". The user's data is safe
+            # (restored from $BACKUP_DIR) but the environment is not
+            # in a known-good state.
+            local setup_ok=0
+            (cd "$TARGET_DIR" && bash ./setup.sh) && setup_ok=1
+            if [ "$setup_ok" -ne 1 ]; then
+                fail "setup.sh failed during update. Toolkit files were updated and user data restored from $BACKUP_DIR, but the Python environment is not usable. Re-run $TARGET_DIR/setup.sh manually to diagnose, or re-run this installer with --skip-deps to apply files without touching the environment."
+            fi
         fi
     fi
 

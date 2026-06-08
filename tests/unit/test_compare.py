@@ -225,6 +225,15 @@ class TestCompareCitationsAndStrict:
         # The all_ids_valid check is a failure, not a warning -> non-zero exit
         assert proc.returncode != 0, "invalid IDs must fail the comparison"
         out = json.loads(proc.stdout)
+        # Top-level status must be "error", not "ok", so automation can
+        # distinguish a failed comparison from a passing one.
+        assert out["status"] == "error", out
+        assert out.get("error") == "comparison_failed", out
         assert out["comparison"] == "failures"
         flat_failures = [f for r in out["failures"] for f in r["failures"]]
         assert any(f.get("check") == "all_ids_valid" for f in flat_failures), flat_failures
+        # The same payload must also appear on stderr for callers that
+        # only inspect stderr (e.g. CI logs).
+        err = json.loads(proc.stderr)
+        assert err["status"] == "error"
+        assert err["error"] == "comparison_failed"

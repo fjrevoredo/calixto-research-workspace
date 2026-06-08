@@ -287,9 +287,9 @@ def run_search(
         removed = clear_cache(cache_dir)
         log.info("cleared %d cache files", removed)
 
-    # Search
-    search_provider = get_search_provider(search_provider_name)
-
+    # Cache lookup must happen BEFORE provider initialization. The cache is
+    # the cheaper path and avoids paying the cost of importing the search
+    # package (e.g. ddgs, requests) when we already have a stored result.
     cache_dir.mkdir(parents=True, exist_ok=True)
     raw_results: list[dict] | None = None
     if use_cache:
@@ -309,7 +309,9 @@ def run_search(
                 "re-run without --use-cache to populate the cache.",
             )
 
+    # Provider is only needed when we will actually call the network.
     if raw_results is None:
+        search_provider = get_search_provider(search_provider_name)
         try:
             search_results = search_provider.search(query, max_results=max_results)
         except Exception as e:

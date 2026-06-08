@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -32,8 +33,22 @@ from pathlib import Path
 THIS_FILE = Path(__file__).resolve()
 TESTS_DIR = THIS_FILE.parent
 GOLDEN_DIR = TESTS_DIR
-REPO_ROOT = TESTS_DIR.parent.parent
-SCRIPTS_DIR = REPO_ROOT / "scripts"
+DEFAULT_REPO_ROOT = TESTS_DIR.parent.parent
+DEFAULT_SCRIPTS_DIR = DEFAULT_REPO_ROOT / "scripts"
+
+# Tests can override REPO_ROOT at runtime by setting CALIXTO_REPO_ROOT
+# in the environment. This is what lets the integration tests run the
+# runner against an isolated, copied repo without touching the
+# developer's real workspaces/ or tests/golden/runs/ directories.
+_env_repo_root = os.environ.get("CALIXTO_REPO_ROOT")
+if _env_repo_root:
+    REPO_ROOT = Path(_env_repo_root).resolve()
+    SCRIPTS_DIR = REPO_ROOT / "scripts"
+    GOLDEN_DIR = REPO_ROOT / "tests" / "golden"
+else:
+    REPO_ROOT = DEFAULT_REPO_ROOT
+    SCRIPTS_DIR = DEFAULT_SCRIPTS_DIR
+    GOLDEN_DIR = TESTS_DIR
 
 for p in (str(REPO_ROOT), str(SCRIPTS_DIR)):
     if p not in sys.path:

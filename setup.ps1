@@ -60,13 +60,15 @@ if ($pyMajor -lt 3 -or ($pyMajor -eq 3 -and $pyMinor -lt 11)) {
 Write-Section "Step 3/7: Installing uv (Python package manager)"
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     $uvVersion = uv --version
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "uv --version failed (rc=$LASTEXITCODE). PATH may be stale; restart the shell."
+    }
     Write-Info "uv already installed: $uvVersion"
 } else {
     Write-Info "uv not found, installing via official PowerShell installer..."
-    try {
-        powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-    } catch {
-        Write-Fail "uv install failed: $_"
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Fail "uv install failed (rc=$LASTEXITCODE). See https://docs.astral.sh/uv/getting-started/installation/"
     }
     $env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
@@ -75,13 +77,13 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
     Write-Info "uv installed: $(uv --version)"
 }
 
-# 4. Sync dependencies
+# 4. Sync dependencies. PowerShell try/catch does NOT reliably catch
+# native executable nonzero exits: $LASTEXITCODE is the source of truth.
 Write-Section "Step 4/7: Installing Python dependencies"
-Write-Info "This installs: crawl4ai (~50MB), duckduckgo-search (~1MB), arxiv (~1MB), pyyaml (~1MB)"
-try {
-    uv sync
-} catch {
-    Write-Fail "uv sync failed: $_"
+Write-Info "This installs: crawl4ai (~50MB), ddgs (~5MB, renamed from duckduckgo-search), arxiv (~1MB), pyyaml (~1MB)"
+uv sync 2>&1 | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "uv sync failed (rc=$LASTEXITCODE). Check network and Python version."
 }
 Write-Info "Python dependencies installed"
 
@@ -89,29 +91,26 @@ Write-Info "Python dependencies installed"
 Write-Section "Step 5/7: Installing Playwright + Chromium for Crawl4AI"
 Write-Info "This downloads Chromium (~450MB) and may take a few minutes"
 $crawl4aiOk = $false
-try {
-    uv run crawl4ai-setup 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { $crawl4aiOk = $true }
-} catch {
-    Write-Warn "crawl4ai-setup encountered an issue: $_"
-}
-if (-not $crawl4aiOk) {
-    Write-Warn "Falling back to direct playwright install"
-    try {
-        uv run python -m playwright install chromium
-    } catch {
-        Write-Warn "Playwright Chromium install had issues. Web scraping may not work until fixed."
+uv run crawl4ai-setup 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    $crawl4aiOk = $true
+} else {
+    Write-Warn "crawl4ai-setup returned rc=$LASTEXITCODE; falling back to direct playwright install"
+    uv run python -m playwright install chromium 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Playwright Chromium install had issues (rc=$LASTEXITCODE). Web scraping may not work until fixed."
         Write-Warn "See https://playwright.dev/python/docs/intro for manual install on Windows."
     }
 }
 
-# 6. Verify the install
+# 6. Verify the install. We verify the live `ddgs` module name
+# (the current name of the duckduckgo-search package).
 Write-Section "Step 6/7: Verifying installation"
 $verifyCode = @'
 import sys
 try:
     import crawl4ai
-    import duckduckgo_search
+    import ddgs
     import arxiv
     import yaml
     print("All required packages importable")
@@ -119,15 +118,11 @@ except ImportError as e:
     print(f"Import failed: {e}", file=sys.stderr)
     sys.exit(1)
 '@
-try {
-    $verifyOutput = uv run python -c $verifyCode 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Fail "Verification failed: $verifyOutput"
-    }
-    Write-Info $verifyOutput
-} catch {
-    Write-Fail "Verification exception: $_"
+uv run python -c $verifyCode 2>&1 | Tee-Object -Variable verifyOutput | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    Write-Fail "Verification failed (rc=$LASTEXITCODE): $verifyOutput"
 }
+Write-Info $verifyOutput
 
 # 7. Summary
 Write-Section "Step 7/7: Setup complete"

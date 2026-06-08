@@ -351,20 +351,35 @@ def main(argv: list[str] | None = None) -> int:
     else:
         overall_status = "ok"
 
-    emit_ok(
-        {
-            "comparison": "ok" if overall_status == "ok" else "failures",
-            "run_a": metrics_a,
-            "run_b": metrics_b,
-            "diff": diff,
-            "failures": all_failures,
-            "warnings": all_warnings,
-            "expected": expected,
-            "strict": bool(args.strict),
-        }
-    )
+    payload = {
+        "comparison": "ok" if overall_status == "ok" else "failures",
+        "run_a": metrics_a,
+        "run_b": metrics_b,
+        "diff": diff,
+        "failures": all_failures,
+        "warnings": all_warnings,
+        "expected": expected,
+        "strict": bool(args.strict),
+    }
+
     if overall_status == "error":
+        # Emit a structured error status to stderr so automation can
+        # distinguish a failing comparison from a successful one even
+        # when both exit with the same code. The full payload (with
+        # metrics, diff, and failures) is preserved verbatim.
+        error_payload = {"status": "error", "error": "comparison_failed", **payload}
+        print(
+            json.dumps(error_payload, indent=2, ensure_ascii=False),
+            file=sys.stderr,
+        )
+        # Also write the same JSON to stdout so callers that capture only
+        # stdout (the common case) still see the rich payload. The top-level
+        # status is the source of truth: "error" means the comparison failed.
+        print(
+            json.dumps({"status": "error", "error": "comparison_failed", **payload}, indent=2, ensure_ascii=False)
+        )
         return 1
+    emit_ok(payload)
     return 0
 
 

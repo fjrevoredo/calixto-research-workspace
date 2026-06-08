@@ -3,12 +3,22 @@
 The golden runner must produce slug-safe workspace names so that init_workspace.py
 does not reject them. These tests verify the timestamp format and that the
 generated default names pass the workspace slug contract.
+
+It also includes integration tests that exercise the golden runner end-to-end
+against a temporary repository root. The temp root is fully isolated, so:
+- the runner cannot pollute the real workspaces/ or tests/golden/runs/
+- leftover artifacts from a previous run cannot break a new run
+- cleanup is exact: the temp dir is removed when the test exits, no other
+  files on the developer's machine are touched
 """
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -40,26 +50,17 @@ class TestGoldenTimestampSlug:
     def test_default_timestamp_format_is_slug_safe(self) -> None:
         """The format `%Y%m%dt%H%M%Sz` uses lowercase t/z, both allowed by slug regex."""
         ts = datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%Sz")
-        # Lowercase t and z keep the format readable while making the whole
-        # string valid as a slug fragment.
         assert "T" not in ts
         assert "Z" not in ts
         assert is_valid_slug(f"golden-{ts}")
         assert is_valid_slug(f"golden-llm-2025-{ts}")
 
     def test_old_iso_format_rejected_as_slug(self) -> None:
-        """The previous `%Y%m%dT%H%M%SZ` format must NOT pass the slug contract.
-
-        This is a regression guard: if someone changes the format back to
-        uppercase T/Z, this test fails before any runtime attempt to create
-        the workspace.
-        """
+        """The previous `%Y%m%dT%H%M%SZ` format must NOT pass the slug contract."""
         ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         assert not is_valid_slug(f"golden-{ts}")
 
     def test_default_name_never_contains_uppercase(self) -> None:
-        """Defense in depth: the generated name must satisfy the slug regex directly."""
-        # The regex itself: lowercase, digits, hyphens, length 2-64.
         for _ in range(20):
             ts = datetime.now(timezone.utc).strftime("%Y%m%dt%H%M%Sz")
             name = f"golden-{ts}"
@@ -76,144 +77,190 @@ class TestRunModuleImports:
         assert hasattr(module, "main")
 
 
-class TestGoldenRunnerPartialFailure:
-    """When a child search fails, the golden runner must:
+# ---------------------------------------------------------------------------
+# Helpers for integration tests that need an isolated repo root.
+# ---------------------------------------------------------------------------
 
-    - Exit with a non-zero status (returncode 2)
-    - Emit a top-level "partial" status
-    - Preserve the partial workspace under the run_archive path
-    - Include structured failure details in the summary
+
+def _build_isolated_repo(tmp_repo_root: Path) -> None:
+    """Build a minimal copy of the toolkit under tmp_repo_root.
+
+    The runner is invoked with cwd=tmp_repo_root, so its `REPO_ROOT` and
+    `GOLDEN_DIR` resolve inside the temp dir. Any workspace or run
+    archive the runner creates stays inside tmp_repo_root, and the
+    developer's real workspaces/ and tests/golden/runs/ are never
+    touched.
+    """
+    tmp_repo_root.mkdir(parents=True, exist_ok=True)
+    # The runner imports from these locations relative to REPO_ROOT.
+    # copytree(..., dirs_exist_ok=True) lets us re-run a partially
+    # populated test without FileExistsError.
+    for sub in ("scripts", "providers", "tests", "templates"):
+        src = REPO_ROOT / sub
+        if not src.exists():
+            continue
+        dst = tmp_repo_root / sub
+        if dst.exists():
+            # Refresh content from source. Useful for tests that
+            # re-enter the same tmp_path fixture scope.
+            shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(src, dst)
+
+
+class TestGoldenRunnerPartialFailure:
+    """End-to-end tests for the partial-failure path, isolated to a temp
+    repo root. The temp root is removed at the end of each test, so:
+
+    - no leftover workspaces in the developer's real workspaces/
+    - no leftover run archives in tests/golden/runs/
+    - re-running the test does not depend on prior state
     """
 
-    def _write_minimal_config(self, config_path: Path, searches: list[dict]) -> None:
+    def _write_minimal_config(
+        self, config_path: Path, searches: list[dict], workspace_prefix: str
+    ) -> None:
         config_path.write_text(
             json.dumps(
                 {
                     "name": "test-runner",
                     "question": "Test",
-                    "workspace_prefix": "test-runner",
+                    "workspace_prefix": workspace_prefix,
                     "searches": searches,
                 }
             ),
             encoding="utf-8",
         )
 
-    def test_child_search_failure_produces_nonzero_exit(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """A child search that exits nonzero must produce a partial golden run."""
-        # Build a search config that will deterministically fail: use --use-cache
-        # with an empty cache, so the child script emits a cache_miss error.
+    def _run_in_isolated_repo(
+        self,
+        tmp_path: Path,
+        searches: list[dict],
+        workspace_name: str,
+    ) -> subprocess.CompletedProcess:
+        """Build an isolated repo under tmp_path and run the golden runner there.
+
+        Returns the subprocess.CompletedProcess for the runner. The
+        workspace name must be a slug-safe string. The temp dir is
+        removed by `_cleanup_isolated_repo` (or by pytest) regardless
+        of pass/fail.
+
+        The runner computes REPO_ROOT from CALIXTO_REPO_ROOT, so the
+        isolated copy receives the workspaces/, run-archive writes,
+        and cache reads.
+        """
+        isolated_repo = tmp_path / "repo"
+        _build_isolated_repo(isolated_repo)
         config_path = tmp_path / "config.json"
-        unique_query = f"no-cache-{tmp_path.name}"
-        self._write_minimal_config(
-            config_path,
+        self._write_minimal_config(config_path, searches, workspace_prefix=workspace_name)
+        env = {**os.environ, "CALIXTO_REPO_ROOT": str(isolated_repo)}
+        return subprocess.run(
             [
-                {
-                    "provider": "duckduckgo",
-                    "query": unique_query,
-                    "max_results": 3,
-                    "do_scrape": False,
-                }
-            ],
-        )
-
-        # Sandbox: redirect REPO_ROOT, workspaces dir, and cache dir to tmp_path
-        # so the test does not pollute the real repo.
-        empty_cache = tmp_path / "empty-cache"
-        empty_cache.mkdir()
-        workspaces_dir = tmp_path / "workspaces"
-        workspaces_dir.mkdir()
-        runs_dir = tmp_path / "runs"
-        runs_dir.mkdir()
-
-        # Patch the run module's REPO_ROOT and GOLDEN_DIR to point at tmp_path
-        run_mod = _load_run_module()
-        monkeypatch.setattr(run_mod, "REPO_ROOT", tmp_path)
-        monkeypatch.setattr(run_mod, "GOLDEN_DIR", tmp_path)
-        monkeypatch.setattr(run_mod, "SCRIPTS_DIR", tmp_path / "scripts")
-        # Force the cache dir to be empty so --use-cache fails
-        monkeypatch.setattr(
-            "search_web.DEFAULT_CACHE_DIR",
-            empty_cache,
-            raising=False,
-        )
-        # The runner looks up default search provider; we don't want a real call.
-        # We don't patch it here because the failure happens at cache-load time
-        # (no live call is made under --use-cache).
-
-        # Invoke the runner as a subprocess so we exercise the real CLI exit code
-        import subprocess
-        import sys as _sys
-        unique_ws = f"fail-run-{tmp_path.name}".replace("test_", "t")
-        result = subprocess.run(
-            [
-                _sys.executable, str(RUN_PY),
+                sys.executable, str(RUN_PY),
                 "--config", str(config_path),
                 "--use-cache",
-                "--workspace-name", unique_ws,
+                "--workspace-name", workspace_name,
             ],
-            cwd=str(REPO_ROOT),
+            cwd=str(isolated_repo),
+            env=env,
             capture_output=True,
             text=True,
         )
-        assert result.returncode != 0, (
-            f"expected nonzero exit on child failure, got {result.returncode}\n"
-            f"stdout={result.stdout}\nstderr={result.stderr}"
+
+    def _cleanup_isolated_repo(self, tmp_path: Path) -> None:
+        """Remove the isolated repo (workspace + run archive are inside)."""
+        isolated_repo = tmp_path / "repo"
+        if isolated_repo.exists():
+            shutil.rmtree(isolated_repo, ignore_errors=True)
+        # The config was also written into tmp_path; tmp_path is
+        # managed by pytest and cleaned up automatically, but be
+        # explicit so a failure here is visible.
+        config = tmp_path / "config.json"
+        if config.exists():
+            config.unlink(missing_ok=True)
+
+    def test_child_search_failure_produces_nonzero_exit(self, tmp_path: Path) -> None:
+        """A child search that exits nonzero must produce a partial golden run.
+
+        We force the failure deterministically by passing --use-cache
+        with a query that has no cache entry. The child search_web.py
+        emits a structured cache_miss error (exit 1). The runner must
+        catch this as a child failure, archive the partial workspace,
+        and exit 2 with a "partial" status on stdout.
+        """
+        import uuid
+        ws_name = f"fail-partial-{uuid.uuid4().hex[:8]}"
+        assert is_valid_slug(ws_name)
+        # Use a query that is guaranteed to be absent from any committed cache.
+        unique_query = f"unique-uncached-{uuid.uuid4().hex[:8]}"
+        result = self._run_in_isolated_repo(
+            tmp_path,
+            [{"provider": "duckduckgo", "query": unique_query, "max_results": 3, "do_scrape": False}],
+            workspace_name=ws_name,
         )
-        # The status should be "partial" (or at least not "ok")
         try:
+            assert result.returncode != 0, (
+                f"expected nonzero exit on child failure, got {result.returncode}\n"
+                f"stdout={result.stdout}\nstderr={result.stderr}"
+            )
             payload = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            pytest.fail(f"runner output is not JSON: {result.stdout!r}")
-        assert payload.get("status") in ("partial", "error"), payload
-        # The failure detail should be present
-        assert "summary" in payload or "error" in payload
-        if "summary" in payload:
-            summary = payload["summary"]
-            assert summary.get("searches_failed", 0) >= 1
+            assert payload.get("status") == "partial", payload
+            summary = payload.get("summary", {})
+            assert summary.get("searches_failed", 0) >= 1, summary
             failed = summary.get("failed_searches", [])
             assert any("no cache" in (f.get("error") or "").lower() for f in failed), failed
+        finally:
+            self._cleanup_isolated_repo(tmp_path)
 
-    def test_partial_workspace_is_preserved(
-        self, tmp_path: Path
-    ) -> None:
+    def test_partial_workspace_is_preserved(self, tmp_path: Path) -> None:
         """The partial workspace directory must be preserved under the run archive.
 
-        This is the no-silent-failures principle: even when a child search
-        fails, the operator can inspect what was collected.
+        Even when a child search fails, the operator must be able to
+        inspect what was collected. This is the no-silent-failures
+        principle from PHILOSOPHY.md.
         """
-        config_path = tmp_path / "config.json"
-        unique_query = f"preserve-test-{tmp_path.name}"
-        self._write_minimal_config(
-            config_path,
-            [
-                {
-                    "provider": "duckduckgo",
-                    "query": unique_query,
-                    "max_results": 3,
-                    "do_scrape": False,
-                }
-            ],
-        )
-        # Use a real subprocess so the workspace creation is real
-        import subprocess
-        import sys as _sys
-        unique_ws = f"preserve-{tmp_path.name}".replace("test_", "t")
-        result = subprocess.run(
-            [
-                _sys.executable, str(RUN_PY),
-                "--config", str(config_path),
-                "--use-cache",
-                "--workspace-name", unique_ws,
-            ],
-            cwd=str(REPO_ROOT),
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode != 0
-        # The workspace directory should still exist on disk for inspection
-        ws = REPO_ROOT / "workspaces" / unique_ws
-        assert ws.exists(), f"partial workspace was deleted: {ws}"
-        # It must contain at least the config.json from init_workspace.py
-        assert (ws / "config.json").is_file()
+        import uuid
+        # Use a uuid-based workspace name so we don't depend on
+        # tmp_path.name's slug-safety (pytest puts underscores in it).
+        ws_name = f"fail-preserve-{uuid.uuid4().hex[:8]}"
+        assert is_valid_slug(ws_name), ws_name
+        unique_query = f"preserve-{ws_name}"
+        isolated_repo = tmp_path / "repo"
+        _build_isolated_repo(isolated_repo)
+        env = {**os.environ, "CALIXTO_REPO_ROOT": str(isolated_repo)}
+        try:
+            config_path = tmp_path / "config.json"
+            self._write_minimal_config(
+                config_path,
+                [{"provider": "duckduckgo", "query": unique_query, "max_results": 3, "do_scrape": False}],
+                workspace_prefix=ws_name,
+            )
+            result = subprocess.run(
+                [
+                    sys.executable, str(RUN_PY),
+                    "--config", str(config_path),
+                    "--use-cache",
+                    "--workspace-name", ws_name,
+                ],
+                cwd=str(isolated_repo),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+            assert result.returncode != 0, (
+                f"expected nonzero exit on child failure, got {result.returncode}\n"
+                f"stdout={result.stdout}\nstderr={result.stderr}"
+            )
+            # The workspace + run archive live inside the isolated
+            # repo. The run archive is at tests/golden/runs/<ts>/. The
+            # workspace is at workspaces/<name>/. Both must exist.
+            ws = isolated_repo / "workspaces" / ws_name
+            assert ws.exists(), f"partial workspace was not created: {ws}"
+            assert (ws / "config.json").is_file()
+            # The run archive is a directory whose name is a timestamp
+            # we don't know in advance; we just assert at least one was
+            # written.
+            runs = isolated_repo / "tests" / "golden" / "runs"
+            archived = [p for p in runs.iterdir() if p.is_dir()] if runs.exists() else []
+            assert archived, f"no run archive was written under {runs}"
+        finally:
+            self._cleanup_isolated_repo(tmp_path)

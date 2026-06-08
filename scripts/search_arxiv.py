@@ -148,12 +148,14 @@ def run_arxiv_search(
 
     config = load_workspace_config(workspace)
     index = load_source_index(workspace)
-    arxiv_pkg = _ensure_arxiv_client()
 
     if clear_cache_first and cache_dir.exists():
         removed = clear_cache(cache_dir)
         log.info("cleared %d cache files", removed)
 
+    # Cache lookup must happen BEFORE the arxiv client is constructed.
+    # The arxiv client pays a connection cost on import; for cached
+    # reproducible runs we should not pay it at all.
     cache_dir.mkdir(parents=True, exist_ok=True)
     raw_results: list[dict] | None = None
     cache_provider = f"arxiv"
@@ -175,6 +177,7 @@ def run_arxiv_search(
             )
 
     if raw_results is None:
+        arxiv_pkg = _ensure_arxiv_client()
         # Build the arxiv Search
         search_kwargs: dict[str, Any] = {
             "query": query,
@@ -214,11 +217,16 @@ def run_arxiv_search(
                 }
             )
 
-        if use_cache:
-            save_cache(
-                cache_dir, cache_provider, query, max_results, raw_results,
-                category=category, sort_by=sort_by,
-            )
+        # Save the cache unconditionally after a successful live call.
+        # `--use-cache` controls whether a cache *hit* is required, not
+        # whether cache *writes* occur: every successful live search
+        # should populate the cache so future reproducible runs can
+        # replay it. This decouples cache writes from the --use-cache
+        # flag, matching the contract in requirements.md section 10.2.
+        save_cache(
+            cache_dir, cache_provider, query, max_results, raw_results,
+            category=category, sort_by=sort_by,
+        )
 
     # Dedup by arxiv_id
     existing_arxiv_ids = {

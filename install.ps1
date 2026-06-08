@@ -165,7 +165,11 @@ function Invoke-FreshInstall {
         if (Test-Path $setupPath) {
             & pwsh -ExecutionPolicy Bypass -File $setupPath
             if ($LASTEXITCODE -ne 0) {
-                Write-Warn "setup.ps1 had issues. Re-run with .\setup.ps1 to retry."
+                # The fresh-install contract is "after this script exits
+                # 0, the environment is usable". A failed setup must
+                # not leave the user with a "Fresh install complete"
+                # message and an unusable environment.
+                Write-Fail "setup.ps1 failed (rc=$LASTEXITCODE). Toolkit files are installed at $TargetDir, but the Python environment is not usable. Re-run $TargetDir\setup.ps1 manually to diagnose, or re-run this installer with -SkipDeps to install files without setting up the environment."
             }
         }
     }
@@ -202,13 +206,18 @@ function Invoke-UpdateWorkspace {
     if (-not $DryRun) {
         New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
     }
-    foreach ($item in @('workspaces', 'notes', 'outputs')) {
+    foreach ($item in @('workspaces', 'notes', 'outputs', 'config.json')) {
         $src = Join-Path $TargetDir $item
         if (Test-Path $src) {
             $dst = Join-Path $backupDir $item
             Invoke-Step { Copy-Item -LiteralPath $src -Destination $dst -Recurse -Force }
         }
     }
+    # Also back up any *.local config overrides at the workspace root.
+    Get-ChildItem -LiteralPath $TargetDir -Filter '*.local' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Invoke-Step { Copy-Item -LiteralPath $_.FullName -Destination $backupDir -Force }
+        }
 
     $src = Get-RepoSource
     $staging = Join-Path $TargetDir '.calixto-update'
@@ -246,9 +255,11 @@ function Invoke-UpdateWorkspace {
         }
     }
 
-    # Restore user data from backup
+    # Restore user data from backup. config.json and *.local overrides
+    # are restored alongside the data dirs so user-owned config survives
+    # the update.
     Write-Info "Restoring user data from backup"
-    foreach ($item in @('workspaces', 'notes', 'outputs')) {
+    foreach ($item in @('workspaces', 'notes', 'outputs', 'config.json')) {
         $backupItem = Join-Path $backupDir $item
         if (Test-Path $backupItem) {
             $targetItem = Join-Path $TargetDir $item
@@ -258,6 +269,12 @@ function Invoke-UpdateWorkspace {
             }
         }
     }
+    Get-ChildItem -LiteralPath $backupDir -Filter '*.local' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Invoke-Step {
+                Copy-Item -LiteralPath $_.FullName -Destination $TargetDir -Force
+            }
+        }
 
     if (-not $DryRun -and (Test-Path $staging)) {
         Remove-Item $staging -Recurse -Force
@@ -269,6 +286,11 @@ function Invoke-UpdateWorkspace {
             $setupPath = Join-Path $TargetDir 'setup.ps1'
             if (Test-Path $setupPath) {
                 & pwsh -ExecutionPolicy Bypass -File $setupPath
+                if ($LASTEXITCODE -ne 0) {
+                    # User's data is safe (restored from $backupDir) but
+                    # the environment is not in a known-good state.
+                    Write-Fail "setup.ps1 failed during update (rc=$LASTEXITCODE). Toolkit files were updated and user data restored from $backupDir, but the Python environment is not usable. Re-run $TargetDir\setup.ps1 manually to diagnose, or re-run this installer with -SkipDeps to apply files without touching the environment."
+                }
             }
         }
     }

@@ -47,7 +47,7 @@ info "uv ready: $UV_VERSION"
 
 # 3. Sync dependencies via uv
 log "Step 3/6: Installing Python dependencies"
-info "This installs: crawl4ai (~50MB), duckduckgo-search (~1MB), arxiv (~1MB), pyyaml (~1MB)"
+info "This installs: crawl4ai (~50MB), ddgs (~5MB, renamed from duckduckgo-search), arxiv (~1MB), pyyaml (~1MB)"
 if ! uv sync; then
     fail "uv sync failed. Check network and Python version."
 fi
@@ -64,9 +64,11 @@ if ! uv run crawl4ai-setup 2>/dev/null; then
     fi
 fi
 
-# 5. Verify the install
+# 5. Verify the install. The DuckDuckGo provider imports `ddgs`
+# (the current name of the duckduckgo-search package). We verify `ddgs`,
+# not the unmaintained `duckduckgo_search` module.
 log "Step 5/6: Verifying installation"
-VERIFY_OUTPUT="$(uv run python -c 'import crawl4ai, duckduckgo_search, arxiv, yaml; print("ok")' 2>&1)" || {
+VERIFY_OUTPUT="$(uv run python -c 'import crawl4ai, ddgs, arxiv, yaml; print("ok")' 2>&1)" || {
     fail "Verification import failed: $VERIFY_OUTPUT"
 }
 info "All required packages importable: $VERIFY_OUTPUT"
