@@ -10,8 +10,8 @@ set -euo pipefail
 shopt -s dotglob nullglob
 
 TARGET_DIR="$(pwd)"
-REPO_URL="${CALIXTO_REPO_URL:-https://github.com/calixto/calixto.git}"
-REPO_BRANCH="${CALIXTO_REPO_BRANCH:-main}"
+REPO_URL="${CALIXTO_REPO_URL:-https://github.com/fjrevoredo/calixto-research-workspace.git}"
+REPO_BRANCH="${CALIXTO_REPO_BRANCH:-master}"
 REPO_BRANCH_EXPLICIT=0
 if [ -n "${CALIXTO_REPO_BRANCH:-}" ]; then
     REPO_BRANCH_EXPLICIT=1
@@ -49,7 +49,7 @@ Options:
   --skip-deps          Skip running setup.sh / setup.ps1 afterwards
   --version TAG        Install a specific release tag
   --repo URL           Use a different GitHub repository URL
-  --branch BRANCH      Install a specific branch (default: main)
+  --branch BRANCH      Install a specific branch (default: master)
   --help               Show this help and exit
 EOF
 }

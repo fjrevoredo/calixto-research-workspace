@@ -14,12 +14,12 @@ param(
     [string]$RepoUrl = $(if ($env:CALIXTO_REPO_URL) {
         $env:CALIXTO_REPO_URL
     } else {
-        'https://github.com/calixto/calixto.git'
+        'https://github.com/fjrevoredo/calixto-research-workspace.git'
     }),
     [string]$Branch = $(if ($env:CALIXTO_REPO_BRANCH) {
         $env:CALIXTO_REPO_BRANCH
     } else {
-        'main'
+        'master'
     })
 )
 

@@ -90,13 +90,13 @@ Fresh install into a new empty directory:
 **Unix**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/calixto/calixto/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/fjrevoredo/calixto-research-workspace/master/install.sh | bash
 ```
 
 **Windows**
 
 ```powershell
-irm https://raw.githubusercontent.com/calixto/calixto/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/fjrevoredo/calixto-research-workspace/master/install.ps1 | iex
 ```
 
 Running the same installer command in an existing toolkit checkout updates the
