@@ -25,6 +25,11 @@
     },
     {
       "kind": "file",
+      "source": "runtime/workspace/uv.lock",
+      "destination": "uv.lock"
+    },
+    {
+      "kind": "file",
       "source": "runtime/workspace/setup.sh",
       "destination": "setup.sh"
     },

@@ -27,6 +27,35 @@ RUNTIME_SETUP_SH = REPO_ROOT / "runtime" / "workspace" / "setup.sh"
 RUNTIME_SETUP_PS1 = REPO_ROOT / "runtime" / "workspace" / "setup.ps1"
 
 
+def _iter_imported_modules(text: str) -> list[str]:
+    modules: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", 1)[0]
+        if "import " not in line:
+            continue
+        _, _, tail = line.partition("import ")
+        import_clause = tail.split(";", 1)[0]
+        for chunk in import_clause.split(","):
+            token = chunk.strip().split()
+            if not token:
+                continue
+            modules.append(token[0].strip("'\""))
+    return modules
+
+
+def _imports_module(text: str, module: str) -> bool:
+    return module in _iter_imported_modules(text)
+
+
+def _legacy_import_lines(text: str, module: str) -> list[str]:
+    matches: list[str] = []
+    for raw_line in text.splitlines():
+        stripped = raw_line.split("#", 1)[0]
+        if module in _iter_imported_modules(stripped):
+            matches.append(raw_line)
+    return matches
+
+
 def _is_windows() -> bool:
     return sys.platform == "win32"
 
@@ -51,13 +80,7 @@ class TestSetupShPackageCheck:
         if not _have_bash():
             pytest.skip("bash not available")
         text = SETUP_SH.read_text(encoding="utf-8")
-        # The verification step imports ddgs. The import may be part
-        # of a combined import like "import crawl4ai, ddgs, arxiv, yaml",
-        # so we use a regex that matches the token boundary.
-        import re
-        # Look for `ddgs` as a module name in an import statement.
-        pattern = re.compile(r"\bimport\s+[^\n;]*\bddgs\b")
-        assert pattern.search(text), (
+        assert _imports_module(text, "ddgs"), (
             "setup.sh verification step must import `ddgs` (the current "
             "name of the duckduckgo-search package). Did not find an "
             "import of ddgs in setup.sh."
@@ -67,18 +90,11 @@ class TestSetupShPackageCheck:
         if not _have_bash():
             pytest.skip("bash not available")
         text = SETUP_SH.read_text(encoding="utf-8")
-        # The script's verification step must not import the
-        # unmaintained `duckduckgo_search` name. We allow it in
-        # comments.
-        import re
-        pattern = re.compile(r"\bimport\s+[^\n;]*\bduckduckgo_search\b")
-        for line in text.splitlines():
-            stripped = line.split("#", 1)[0]  # strip trailing comment
-            if pattern.search(stripped):
-                pytest.fail(
-                    f"setup.sh imports the legacy `duckduckgo_search` "
-                    f"module on a non-comment line: {line!r}"
-                )
+        violations = _legacy_import_lines(text, "duckduckgo_search")
+        assert not violations, (
+            "setup.sh imports the legacy `duckduckgo_search` "
+            f"module on non-comment lines: {violations!r}"
+        )
 
     def test_setup_sh_lists_ddgs_in_install_message(self) -> None:
         """The progress message about what's being installed should also reflect the new name."""
@@ -166,9 +182,7 @@ class TestSetupShPackageCheck:
         if not _have_bash():
             pytest.skip("bash not available")
         text = RUNTIME_SETUP_SH.read_text(encoding="utf-8")
-        import re
-        pattern = re.compile(r"\bimport\s+[^\n;]*\bddgs\b")
-        assert pattern.search(text), (
+        assert _imports_module(text, "ddgs"), (
             "runtime/workspace/setup.sh verification step must import `ddgs`."
         )
 
@@ -193,12 +207,33 @@ class TestSetupShPackageCheck:
                     "bash is the WSL launcher but no WSL distribution "
                     "is installed; syntax check is not meaningful here"
                 )
-        result = subprocess.run(
-            ["bash", "-n"],
-            input=RUNTIME_SETUP_SH.read_text(encoding="utf-8"),
-            capture_output=True,
-            text=True,
+        import tempfile
+        snippet = (
+            "# Syntax-check the script at $CALIXTO_SCRIPT_PATH\n"
+            'bash -n "$CALIXTO_SCRIPT_PATH"\n'
         )
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".sh", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(snippet)
+            snippet_path = f.name
+        try:
+            result = subprocess.run(
+                ["bash", snippet_path],
+                env={**os.environ, "CALIXTO_SCRIPT_PATH": str(RUNTIME_SETUP_SH)},
+                capture_output=True,
+                text=True,
+            )
+        finally:
+            os.unlink(snippet_path)
+        if result.returncode != 0 and (
+            "no such file" in result.stderr.lower()
+            or "cannot access" in result.stderr.lower()
+        ):
+            pytest.skip(
+                f"bash cannot access {RUNTIME_SETUP_SH} on this host "
+                f"(stderr={result.stderr!r}); skipping syntax check"
+            )
         assert result.returncode == 0, (
             f"runtime/workspace/setup.sh has a syntax error: {result.stderr}"
         )
@@ -232,11 +267,7 @@ class TestSetupPs1NativeExitCodes:
         if not _have_pwsh():
             pytest.skip("pwsh not available")
         text = SETUP_PS1.read_text(encoding="utf-8")
-        # Match `ddgs` as a module name in an import statement, allowing
-        # combined imports like "import crawl4ai, ddgs, arxiv, yaml".
-        import re
-        pattern = re.compile(r"\bimport\s+[^\n;]*\bddgs\b")
-        assert pattern.search(text), (
+        assert _imports_module(text, "ddgs"), (
             "setup.ps1 verification step must import `ddgs` (the current "
             "name of the duckduckgo-search package). Did not find an "
             "import of ddgs in setup.ps1."
@@ -246,15 +277,11 @@ class TestSetupPs1NativeExitCodes:
         if not _have_pwsh():
             pytest.skip("pwsh not available")
         text = SETUP_PS1.read_text(encoding="utf-8")
-        import re
-        pattern = re.compile(r"\bimport\s+[^\n;]*\bduckduckgo_search\b")
-        for line in text.splitlines():
-            stripped = line.split("#", 1)[0]
-            if pattern.search(stripped):
-                pytest.fail(
-                    f"setup.ps1 imports the legacy `duckduckgo_search` "
-                    f"module on a non-comment line: {line!r}"
-                )
+        violations = _legacy_import_lines(text, "duckduckgo_search")
+        assert not violations, (
+            "setup.ps1 imports the legacy `duckduckgo_search` "
+            f"module on non-comment lines: {violations!r}"
+        )
 
     def test_setup_ps1_checks_last_exit_code_for_uv_sync(self) -> None:
         """After `uv sync`, the script must check $LASTEXITCODE explicitly.
@@ -340,8 +367,6 @@ class TestSetupPs1NativeExitCodes:
         if not _have_pwsh():
             pytest.skip("pwsh not available")
         text = RUNTIME_SETUP_PS1.read_text(encoding="utf-8")
-        import re
-        pattern = re.compile(r"\bimport\s+[^\n;]*\bddgs\b")
-        assert pattern.search(text), (
+        assert _imports_module(text, "ddgs"), (
             "runtime/workspace/setup.ps1 verification step must import `ddgs`."
         )

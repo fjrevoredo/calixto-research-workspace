@@ -39,7 +39,7 @@ fi
 info "uv ready: $(uv --version)"
 
 log "Step 3/5: Syncing workspace dependencies"
-if ! uv sync; then
+if ! uv sync --locked; then
     fail "uv sync failed. Check network access and Python version."
 fi
 info "Workspace dependencies installed"

@@ -71,7 +71,7 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
 }
 
 Write-Section "Step 4/6: Syncing workspace dependencies"
-uv sync
+uv sync --locked
 if ($LASTEXITCODE -ne 0) {
     Write-Fail "uv sync failed (rc=$LASTEXITCODE). Check network access and Python version."
 }

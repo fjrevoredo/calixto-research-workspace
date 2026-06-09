@@ -17,9 +17,6 @@ workspaces/
 venv/
 env/
 
-# uv lock file (regenerated on uv sync)
-uv.lock
-
 # Golden dataset cache and runs.
 # The cache contains committed search results that make the
 # `--use-cache` golden run reproducible from a clean checkout.

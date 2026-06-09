@@ -48,7 +48,7 @@ info "uv ready: $UV_VERSION"
 # 3. Sync dependencies via uv
 log "Step 3/6: Installing Python dependencies"
 info "This installs: crawl4ai (~50MB), ddgs (~5MB, renamed from duckduckgo-search), arxiv (~1MB), pyyaml (~1MB)"
-if ! uv sync; then
+if ! uv sync --locked; then
     fail "uv sync failed. Check network and Python version."
 fi
 info "Python dependencies installed"

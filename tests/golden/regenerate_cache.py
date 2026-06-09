@@ -10,6 +10,7 @@ consistently with the search_arxiv / search_web cache_key implementations.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -17,6 +18,21 @@ REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from search_web import cache_key, cache_path_for
+
+SAFE_CACHE_KEY = re.compile(r"^[0-9a-f]{16}$")
+ALLOWED_CACHE_PROVIDERS = {"duckduckgo", "arxiv"}
+
+
+def _validated_cache_path(cache_dir: Path, provider: str, key: str) -> Path:
+    if provider not in ALLOWED_CACHE_PROVIDERS:
+        raise ValueError(f"unsupported cache provider: {provider}")
+    if not SAFE_CACHE_KEY.fullmatch(key):
+        raise ValueError(f"unsafe cache key: {key!r}")
+    provider_dir = (cache_dir / provider).resolve()
+    path = cache_path_for(cache_dir, provider, key).resolve()
+    if not path.is_relative_to(provider_dir):
+        raise ValueError(f"cache path escapes provider directory: {path}")
+    return path
 
 
 def _read_old_duckduckgo_cache() -> list[dict]:
@@ -84,7 +100,7 @@ def main() -> int:
     # Migrate web cache
     for entry in _read_old_duckduckgo_cache():
         provider = entry["provider"]
-        new_path = cache_path_for(cache_dir, provider, entry["new_key"])
+        new_path = _validated_cache_path(cache_dir, provider, entry["new_key"])
         payload = {
             "provider": provider,
             "query": entry["query"],
@@ -96,7 +112,7 @@ def main() -> int:
         }
         new_path.parent.mkdir(parents=True, exist_ok=True)
         new_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-        old_path = cache_path_for(cache_dir, provider, entry["old_key"])
+        old_path = _validated_cache_path(cache_dir, provider, entry["old_key"])
         if old_path != new_path and old_path.exists():
             old_path.unlink()
         print(f"web: {old_path.name} -> {new_path.name} ({len(entry['results'])} results)")
@@ -104,7 +120,7 @@ def main() -> int:
     # Migrate arxiv cache
     for entry in _read_old_arxiv_cache():
         provider = entry["provider"]
-        new_path = cache_path_for(cache_dir, provider, entry["new_key"])
+        new_path = _validated_cache_path(cache_dir, provider, entry["new_key"])
         payload = {
             "provider": provider,
             "query": entry["query"],
@@ -116,7 +132,7 @@ def main() -> int:
         }
         new_path.parent.mkdir(parents=True, exist_ok=True)
         new_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-        old_path = cache_path_for(cache_dir, provider, entry["old_key"])
+        old_path = _validated_cache_path(cache_dir, provider, entry["old_key"])
         if old_path != new_path and old_path.exists():
             old_path.unlink()
         print(f"arxiv: {old_path.name} -> {new_path.name} ({len(entry['results'])} results)")

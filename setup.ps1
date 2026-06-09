@@ -81,7 +81,7 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
 # native executable nonzero exits: $LASTEXITCODE is the source of truth.
 Write-Section "Step 4/7: Installing Python dependencies"
 Write-Info "This installs: crawl4ai (~50MB), ddgs (~5MB, renamed from duckduckgo-search), arxiv (~1MB), pyyaml (~1MB)"
-uv sync 2>&1 | Out-Null
+uv sync --locked 2>&1 | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Fail "uv sync failed (rc=$LASTEXITCODE). Check network and Python version."
 }
