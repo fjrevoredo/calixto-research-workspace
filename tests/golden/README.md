@@ -116,5 +116,5 @@ For the full report excerpt and observations, see `tests/golden/runs/first-run-2
 ## See Also
 
 - `requirements.md` section 10: Golden dataset specification
-- `skills/deep-research.md`: the workflow the golden run exercises
+- `skills/deep-research/SKILL.md`: the toolkit-side handoff into the standalone research workflow
 - `scripts/workspace_info.py audit`: the traceability check used in evaluation

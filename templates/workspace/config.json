@@ -1,5 +1,10 @@
 {
   "name": "example",
+  "workspace_schema_version": 2,
+  "workspace_layout": "standalone",
+  "runtime_manifest_version": 1,
+  "runtime_bundle_version": "",
+  "toolkit_version_created_with": "",
   "question": "",
   "scope": {
     "domains": ["web", "papers", "code"],

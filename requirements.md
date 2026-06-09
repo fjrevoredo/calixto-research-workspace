@@ -11,6 +11,7 @@ We are **not** building an app. We are building **infrastructure**: the skills, 
 - **Agent-first.** The project is designed to be understood, modified, extended, and maintained by coding agents. Comprehensive documentation enables agents to work autonomously.
 - **Two modes of operation.** Research mode (default) for performing research. Developer mode for modifying, extending, or maintaining the toolkit. Each mode loads only the context it needs.
 - **File-based state.** Every research session is a workspace folder. All state lives in files (Markdown, JSON). No databases, no servers.
+- **Toolkit root plus standalone workspaces.** The repository root is the toolkit source and factory. Each generated workspace is a self-contained runtime snapshot that can be copied elsewhere and continue after local dependency setup.
 - **Traceability.** Every piece of information has a unique ID and can be traced back to its origin through the full provenance chain.
 - **Modular and configurable.** Each tool does exactly one thing. Opinionated defaults work out of the box, but every choice can be overridden.
 - **Honest about dependencies.** Crawl4AI + Playwright + Chromium is ~500MB. We make setup easy but don't pretend it's lightweight.
@@ -48,7 +49,7 @@ We are **not** building an app. We are building **infrastructure**: the skills, 
 
 ### 3.1 Repository Structure
 
-```
+``` 
 research-workspace/
 ├── README.md
 ├── PHILOSOPHY.md                 # Guiding principles and decision framework
@@ -58,10 +59,14 @@ research-workspace/
 ├── setup.ps1                     # One-shot env setup (PowerShell for Windows)
 │
 ├── skills/
-│   ├── deep-research.md          # General deep research workflow
-│   ├── literature-review.md      # Academic research variant
-│   ├── create-skill.md           # Meta: how to add new skills
-│   └── integrate-tool.md         # Meta: how to add new tools/providers
+│   ├── deep-research/
+│   │   └── SKILL.md              # Toolkit-side handoff into a standalone workspace
+│   ├── literature-review/
+│   │   └── SKILL.md              # Toolkit-side handoff into a standalone workspace
+│   ├── create-skill/
+│   │   └── SKILL.md              # Meta: how to add new skills
+│   └── integrate-tool/
+│       └── SKILL.md              # Meta: how to add new tools/providers
 │
 ├── adapters/
 │   ├── claude-code/              # Claude Code skill installation
@@ -71,8 +76,14 @@ research-workspace/
 │   └── cursor/                   # Cursor rules setup
 │       └── README.md
 │
+├── runtime/                      # Standalone workspace runtime sources + manifest
+│   ├── workspace-manifest.json
+│   └── workspace/
+│       ├── AGENTS.md
+│       ├── setup.sh / setup.ps1
+│       └── skills/
 ├── templates/
-│   └── workspace/                # Starter workspace structure
+│   └── workspace/                # Seed research-state files copied into workspaces
 │       ├── config.json           # Research params, providers, scope
 │       ├── sources/
 │       │   ├── index.json        # Source registry with IDs
@@ -113,17 +124,33 @@ research-workspace/
 │       ├── cache/                # Cached search results for reproducibility
 │       └── expected/             # Reference outputs for comparison
 │
-└── examples/
-    └── sample-workspace/         # A completed research workspace
+├── examples/
+│   └── sample-workspace/         # Reference standalone workspace
+└── workspaces/                   # Generated standalone workspaces
 ```
 
 ### 3.2 Workspace Structure
 
-Every research session creates a workspace folder. The agent works inside it like a coding project:
+Every research session creates a standalone workspace folder. The agent works inside it like a coding project:
 
 ```
 workspaces/
 └── <research-topic-slug>/
+    ├── AGENTS.md                 # Workspace-local research entry point
+    ├── pyproject.toml            # Workspace dependency manifest
+    ├── setup.sh / setup.ps1      # Workspace-local bootstrap
+    ├── skills/
+    │   ├── deep-research/
+    │   │   └── SKILL.md
+    │   └── literature-review/
+    │       └── SKILL.md
+    ├── scripts/
+    │   ├── search_web.py
+    │   ├── search_arxiv.py
+    │   └── workspace_info.py
+    ├── providers/
+    │   ├── search/
+    │   └── scrape/
     ├── config.json
     ├── sources/
     │   ├── index.json            # Source registry with IDs
@@ -176,7 +203,7 @@ User query
 | uv | Python package manager | Yes | ~10MB |
 | Crawl4AI | Web scraping (URL → markdown) | Yes | ~50MB |
 | Playwright + Chromium | Browser for Crawl4AI | Yes | ~450MB |
-| duckduckgo-search | Free web search (default) | Yes | ~1MB |
+| ddgs | Free web search (default) | Yes | ~1MB |
 | arxiv (Python) | arXiv API client | Optional | ~1MB |
 | brave-search | Brave search API client | Optional | ~1MB |
 | tavily-python | Tavily search API client | Optional | ~1MB |
@@ -189,15 +216,16 @@ User query
 
 ### 4.1 `init_workspace.py`
 
-Create a new research workspace from the template.
+Create a new standalone research workspace snapshot.
 
-```
-python scripts/init_workspace.py <name> [--path ./workspaces]
+``` 
+uv run python scripts/init_workspace.py <name> [--path ./workspaces]
 ```
 
-- Creates `workspaces/<name>/` with the template structure
-- Generates `config.json` with defaults
-- Prints the workspace path for the agent to use
+- Creates `workspaces/<name>/` as a standalone runtime snapshot
+- Copies bundled scripts, providers, skills, setup helpers, and seed state files
+- Writes explicit workspace metadata into `config.json`
+- Prints structured JSON including the workspace path and runtime metadata
 
 ### 4.2 `search_web.py`
 
@@ -292,7 +320,7 @@ class ScrapeProvider:
 ### 5.2 Default Provider: DuckDuckGo
 
 - Free, no API key required
-- Uses `duckduckgo-search` Python package
+- Uses the `ddgs` Python package
 - Rate limited (~20 requests/minute)
 - Good enough for most research tasks
 
@@ -473,8 +501,8 @@ Our skills live in `skills/*.md` but each agent loads instructions differently:
 
 - `AGENTS.md` at repo root: universal entry point for any agent
 - `adapters/<agent>/README.md`: agent-specific setup instructions
-- Each adapter explains how to symlink/copy skills into the agent's expected location
-- Skills themselves are agent-agnostic markdown
+- Each adapter explains the toolkit-root vs workspace-root boundary for that agent
+- Skills themselves are agent-agnostic markdown, with workspace runtime copies bundled into standalone workspaces
 
 ### 9.3 `AGENTS.md`
 
@@ -811,8 +839,8 @@ The skill should instruct the agent to:
 
 ### 16.1 Create
 
-```
-python scripts/init_workspace.py <name>
+``` 
+uv run python scripts/init_workspace.py <name>
 ```
 
 ### 16.2 List

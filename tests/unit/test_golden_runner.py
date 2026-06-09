@@ -93,9 +93,12 @@ def _build_isolated_repo(tmp_repo_root: Path) -> None:
     """
     tmp_repo_root.mkdir(parents=True, exist_ok=True)
     # The runner imports from these locations relative to REPO_ROOT.
+    # init_workspace.py now builds standalone workspaces from the runtime
+    # manifest, so the isolated repo must include every source subtree the
+    # manifest reads from.
     # copytree(..., dirs_exist_ok=True) lets us re-run a partially
     # populated test without FileExistsError.
-    for sub in ("scripts", "providers", "tests", "templates"):
+    for sub in ("scripts", "providers", "tests", "templates", "runtime", "skills"):
         src = REPO_ROOT / sub
         if not src.exists():
             continue
@@ -105,6 +108,10 @@ def _build_isolated_repo(tmp_repo_root: Path) -> None:
             # re-enter the same tmp_path fixture scope.
             shutil.rmtree(dst, ignore_errors=True)
         shutil.copytree(src, dst)
+    for file_name in ("LICENSE", ".python-version", "pyproject.toml"):
+        src = REPO_ROOT / file_name
+        if src.exists():
+            shutil.copy2(src, tmp_repo_root / file_name)
 
 
 class TestGoldenRunnerPartialFailure:

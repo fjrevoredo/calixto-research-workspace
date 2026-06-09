@@ -163,3 +163,12 @@ Each entry must use this structure:
 - **Decision:** The installer tests now execute the actual `install.sh` and `install.ps1` entrypoints from isolated checkout copies, use explicit pytest markers for Unix/Windows/archive paths, and remove the older static PowerShell helper-redefinition tests.
 - **Rationale:** The old tests proved too little: they could pass while the real installer paths still failed, and they leaked assumptions from the developer checkout into fixture expectations. Running the real installers from isolated checkouts is slower but materially more trustworthy.
 - **Impact:** CI can target required installer paths explicitly, and those tests now validate source selection, archive fallback, managed-entry behavior, rollback, interrupted-transaction recovery, and dry-run guarantees against the actual installer scripts.
+
+## Decision 015: The toolkit root is a factory; new workspaces are standalone runtime snapshots
+
+- **Date:** 2026-06-09
+- **Task:** Self-contained workspace redesign
+- **Milestone:** Standalone workspace architecture reset
+- **Decision:** `scripts/init_workspace.py` now creates a standalone workspace snapshot instead of copying only the data template. The snapshot bundles research-facing scripts, providers, skills, setup helpers, dependency metadata, and workspace state files. The toolkit root remains the source used to generate future workspaces.
+- **Rationale:** The previous model drifted into a mixed root/workspace runtime where updates had to preserve, infer, and sometimes roll back research state inside the same tree as toolkit files. That boundary made the installer and docs more complex than the product needed. Treating the toolkit root as a factory and each workspace as the execution unit is simpler, more portable, and closer to the original vision.
+- **Impact:** New workspaces can be copied elsewhere and continue after local dependency setup. Research mode now belongs in the generated workspace, not the toolkit root. Toolkit updates affect future workspaces only. The runtime bundle is defined by `runtime/workspace-manifest.json` and validated by tests.

@@ -23,12 +23,12 @@ SKIP_DEPS=0
 TEST_MODE="${CALIXTO_TEST_MODE:-0}"
 TEST_ARCHIVE_URL="${CALIXTO_TEST_ARCHIVE_URL:-}"
 TEST_CA_CERT="${CALIXTO_TEST_CA_CERT:-}"
-BACKUP_DIR=""
 
 WORKSPACE_MARKERS=(
     "PHILOSOPHY.md"
     "requirements.md"
     "AGENTS.md"
+    "runtime"
     "setup.sh"
     "setup.ps1"
     "templates"
@@ -377,29 +377,11 @@ fresh_install() {
     run_setup_if_requested "$TARGET_DIR/setup.sh" "fresh install"
 
     log "Fresh install complete"
-    info "To start: cd $TARGET_DIR && python scripts/init_workspace.py my-research"
-}
-
-backup_user_data() {
-    local timestamp
-    timestamp="$(date +%Y%m%d-%H%M%S)"
-    BACKUP_DIR="$TARGET_DIR/.calixto-backup-$timestamp"
-    info "Backing up user data to $BACKUP_DIR"
-    mkdir -p "$BACKUP_DIR"
-    local item
-    for item in workspaces notes outputs config.json; do
-        if [ -e "$TARGET_DIR/$item" ]; then
-            cp -r "$TARGET_DIR/$item" "$BACKUP_DIR/"
-        fi
-    done
-    for entry in "$TARGET_DIR"/*.local; do
-        [ -e "$entry" ] || continue
-        cp "$entry" "$BACKUP_DIR/"
-    done
+    info "To start: cd $TARGET_DIR && uv run python scripts/init_workspace.py my-research"
 }
 
 update_workspace() {
-    log "Mode: workspace update"
+    log "Mode: toolkit update"
     info "Target directory: $TARGET_DIR"
     info "Repository: $REPO_URL"
 
@@ -411,7 +393,7 @@ update_workspace() {
         fi
     done
     if [ "${#missing[@]}" -gt 0 ]; then
-        fail "Directory looks like a partial Calixto workspace. Missing: ${missing[*]}"
+        fail "Directory looks like a partial Calixto toolkit root. Missing: ${missing[*]}"
     fi
 
     confirm "This will update Calixto Research Workspace in '$TARGET_DIR'. Continue?" || {
@@ -424,7 +406,7 @@ update_workspace() {
     info "Source: $src"
 
     if [ "$DRY_RUN" -eq 1 ]; then
-        printf '   [dry-run] would fetch source, validate it, create a backup, and apply an update transaction\n'
+        printf '   [dry-run] would fetch source, validate it, and apply an update transaction to toolkit files only\n'
         exit 0
     fi
 
@@ -462,8 +444,6 @@ update_workspace() {
         exit 1
     fi
 
-    backup_user_data
-
     if ! run_installer_core \
         "$core_script" \
         apply-update \
@@ -483,8 +463,8 @@ update_workspace() {
     fi
 
     log "Update complete"
-    info "Backup preserved at: $BACKUP_DIR"
-    info "To start: cd $TARGET_DIR && python scripts/init_workspace.py my-research"
+    info "Existing workspaces under $TARGET_DIR/workspaces were left untouched."
+    info "To start: cd $TARGET_DIR && uv run python scripts/init_workspace.py my-research"
 }
 
 validate_selector_contract

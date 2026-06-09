@@ -24,15 +24,25 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 
-def _git_ls_files() -> set[Path]:
-    """Return the set of tracked files, as relative paths to REPO_ROOT."""
+def _run_git(args: list[str]) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
-        ["git", "ls-files"],
+        ["git", *args],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        check=True,
     )
+    if result.returncode == 128 and "dubious ownership" in result.stderr.lower():
+        pytest.skip(
+            "git safe.directory is not configured for this sandbox; "
+            "clean-checkout git assertions are not meaningful here"
+        )
+    return result
+
+
+def _git_ls_files() -> set[Path]:
+    """Return the set of tracked files, as relative paths to REPO_ROOT."""
+    result = _run_git(["ls-files"])
+    result.check_returncode()
     return {Path(line) for line in result.stdout.splitlines() if line}
 
 
@@ -95,12 +105,7 @@ def test_future_cache_file_is_not_ignored() -> None:
         "tests/golden/cache/v2/anthropic/result.json",
     ]
     for candidate in candidates:
-        result = subprocess.run(
-            ["git", "check-ignore", candidate],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_git(["check-ignore", candidate])
         assert result.returncode == 1, (
             f"cache file is ignored by .gitignore but should not be: {candidate!r}. "
             f"rc={result.returncode} stdout={result.stdout!r} stderr={result.stderr!r}"
@@ -116,12 +121,7 @@ def test_future_cache_file_is_not_ignored() -> None:
         "tests/golden/cache/newprovider/result.bak",
     ]
     for candidate in non_json_candidates:
-        result = subprocess.run(
-            ["git", "check-ignore", candidate],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-        )
+        result = _run_git(["check-ignore", candidate])
         assert result.returncode == 0, (
             f"non-JSON cache artifact is NOT ignored by .gitignore: {candidate!r}. "
             f"rc={result.returncode} stdout={result.stdout!r}"

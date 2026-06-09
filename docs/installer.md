@@ -1,6 +1,6 @@
 # Installer Behavior
 
-Last updated: 2026-06-08
+Last updated: 2026-06-09
 
 This document describes the supported installer behavior for `install.sh` and
 `install.ps1`.
@@ -10,8 +10,8 @@ This document describes the supported installer behavior for `install.sh` and
 The installer has two modes:
 
 - Fresh install: runs in a verified empty directory and copies the full toolkit.
-- Update: runs inside an existing Calixto workspace and preserves user-owned
-  data plus repository metadata.
+- Update: runs inside an existing Calixto toolkit root and updates toolkit
+  files only while leaving standalone workspaces untouched.
 
 These modes intentionally have different safety rules.
 
@@ -108,9 +108,6 @@ Update preserves these root entries:
 
 - `.git/`
 - `workspaces/`
-- `notes/`
-- `outputs/`
-- `config.json`
 - root `*.local` files
 
 Update replaces or removes only toolkit-owned entries:
@@ -164,12 +161,11 @@ The transaction contains:
 During update:
 
 1. The installer fetches and validates the new source tree.
-2. It backs up user-owned data to `.calixto-backup-<timestamp>/`.
-3. It moves replaced toolkit entries into `rollback/`.
-4. It installs validated replacements one top-level entry at a time.
-5. It verifies required workspace markers and protected user data.
-6. It writes the new `.calixto-managed-entries`.
-7. It removes the transaction directory only after the filesystem update is
+2. It moves replaced toolkit entries into `rollback/`.
+3. It installs validated replacements one top-level entry at a time.
+4. It verifies required toolkit markers and protected root data.
+5. It writes the new `.calixto-managed-entries`.
+6. It removes the transaction directory only after the filesystem update is
    committed successfully.
 
 If replacement fails mid-update, the installer restores the previous toolkit and

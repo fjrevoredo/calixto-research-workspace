@@ -30,12 +30,12 @@ $TestMode = $env:CALIXTO_TEST_MODE -eq '1'
 $TestArchiveUrl = $env:CALIXTO_TEST_ARCHIVE_URL
 $TestCaCert = $env:CALIXTO_TEST_CA_CERT
 $BranchExplicit = $PSBoundParameters.ContainsKey('Branch') -or [bool]$env:CALIXTO_REPO_BRANCH
-$BackupDir = $null
 
 $WorkspaceMarkers = @(
     'PHILOSOPHY.md',
     'requirements.md',
     'AGENTS.md',
+    'runtime',
     'setup.sh',
     'setup.ps1',
     'templates',
@@ -309,23 +309,6 @@ function Invoke-SetupIfRequested {
     }
 }
 
-function Backup-UserData {
-    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $script:BackupDir = Join-Path $TargetDir ".calixto-backup-$timestamp"
-    Write-Info "Backing up user data to $script:BackupDir"
-    New-Item -ItemType Directory -Path $script:BackupDir -Force | Out-Null
-    foreach ($item in @('workspaces', 'notes', 'outputs', 'config.json')) {
-        $source = Join-Path $TargetDir $item
-        if (Test-Path -LiteralPath $source) {
-            Copy-Item -LiteralPath $source -Destination $script:BackupDir -Recurse -Force
-        }
-    }
-    Get-ChildItem -LiteralPath $TargetDir -File -Filter '*.local' -ErrorAction SilentlyContinue |
-        ForEach-Object {
-            Copy-Item -LiteralPath $_.FullName -Destination $script:BackupDir -Force
-        }
-}
-
 function Invoke-FreshInstall {
     Write-Section "Mode: fresh install"
     Write-Info "Target directory: $TargetDir"
@@ -385,11 +368,11 @@ function Invoke-FreshInstall {
     Invoke-SetupIfRequested -Context 'fresh install'
 
     Write-Section "Fresh install complete"
-    Write-Info "To start: cd $TargetDir ; python scripts\init_workspace.py my-research"
+    Write-Info "To start: cd $TargetDir ; uv run python scripts\init_workspace.py my-research"
 }
 
 function Invoke-UpdateWorkspace {
-    Write-Section "Mode: workspace update"
+    Write-Section "Mode: toolkit update"
     Write-Info "Target directory: $TargetDir"
     Write-Info "Repository: $RepoUrl"
 
@@ -400,7 +383,7 @@ function Invoke-UpdateWorkspace {
         }
     }
     if ($missing.Count -gt 0) {
-        Write-Fail "Directory looks like a partial Calixto workspace. Missing: $($missing -join ', ')."
+        Write-Fail "Directory looks like a partial Calixto toolkit root. Missing: $($missing -join ', ')."
     }
 
     if (-not (Confirm-Action "This will update Calixto Research Workspace in '$TargetDir'. Continue?")) {
@@ -412,7 +395,7 @@ function Invoke-UpdateWorkspace {
     Write-Info "Source: $($src.Mode):$($src.Url)"
 
     if ($DryRun) {
-        Write-Host "   [dry-run] would fetch source, validate it, create a backup, and apply an update transaction"
+        Write-Host "   [dry-run] would fetch source, validate it, and apply an update transaction to toolkit files only"
         exit 0
     }
 
@@ -447,8 +430,6 @@ function Invoke-UpdateWorkspace {
         exit $recoverExitCode
     }
 
-    Backup-UserData
-
     $updateExitCode = Invoke-InstallerCore -CoreScript $coreScript -Arguments @(
         'apply-update',
         '--source-root', $sourceRoot,
@@ -468,8 +449,8 @@ function Invoke-UpdateWorkspace {
     }
 
     Write-Section "Update complete"
-    Write-Info "Backup preserved at: $BackupDir"
-    Write-Info "To start: cd $TargetDir ; python scripts\init_workspace.py my-research"
+    Write-Info "Existing workspaces under $TargetDir\workspaces were left untouched."
+    Write-Info "To start: cd $TargetDir ; uv run python scripts\init_workspace.py my-research"
 }
 
 Validate-SelectorContract

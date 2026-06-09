@@ -1,0 +1,123 @@
+---
+name: deep-research
+description: "Performs structured, reproducible research with full source-to-claim traceability inside a standalone Calixto workspace. Use when the user asks for a research report, comparison, literature scan, or any task that needs multiple cited sources. Workflow: confirm the workspace question, search the web and arXiv, extract findings (fnd_NNN), synthesize insights (ins_NNN), write a report with inline [src_NNN] citations, and audit the traceability chain."
+license: MIT
+compatibility: Requires Python 3.11+, a standalone Calixto workspace, and the bundled search-web, search-arxiv, and workspace-info scripts in this workspace.
+metadata:
+  category: research
+  mode: research
+  version: "0.1.0"
+---
+
+# Deep Research
+
+Use this workflow from the root of a standalone workspace.
+
+## Goal
+
+Produce a report where every claim traces back to a source URL:
+
+```text
+search query
+  -> src_NNN (URL)
+    -> fnd_NNN (fact extracted from that source)
+      -> ins_NNN (insight synthesized from findings)
+        -> report.md paragraph
+```
+
+## Scripts And Tools
+
+Run the bundled scripts from this workspace root:
+
+| Script | Purpose |
+|---|---|
+| `scripts/search_web.py` | Search the web and scrape results into this workspace |
+| `scripts/search_arxiv.py` | Search arXiv and save paper metadata |
+| `scripts/workspace_info.py` | Show or audit this workspace |
+
+Use `uv run python ...` if you set up the workspace with `uv`.
+
+## Workflow
+
+### Step 1: Confirm the workspace question
+
+Set or refine the research question in `config.json` before you search.
+
+```json
+{
+  "question": "What are the trade-offs between async and sync Python for I/O-bound workloads?"
+}
+```
+
+Check the current workspace state:
+
+```bash
+uv run python scripts/workspace_info.py show .
+```
+
+### Step 2: Search for sources
+
+Mix web and paper searches. Run 3-5 queries with different angles.
+
+```bash
+uv run python scripts/search_web.py "<query>" --workspace . --max-results 10
+uv run python scripts/search_arxiv.py "<query>" --workspace . --max-results 5
+```
+
+Good queries:
+
+- the topic directly
+- a specific subtopic
+- a counter-perspective
+- authoritative sources
+- recent developments
+
+### Step 3: Read and evaluate sources
+
+Read the saved source markdown in `sources/web/` and `sources/papers/`.
+
+Discard low-quality sources. Keep a short reason in your notes when a source is
+irrelevant, weak, or redundant.
+
+### Step 4: Extract findings
+
+Append facts to `notes/findings.md`:
+
+```markdown
+## fnd_001
+**Source:** src_003
+**Fact:** ...
+**Quote:** "..."
+**Confidence:** high
+```
+
+Every finding must cite at least one `src_NNN`.
+
+### Step 5: Synthesize insights
+
+Append to `notes/summary.md`:
+
+```markdown
+## ins_001
+**Based on:** fnd_001, fnd_002
+**Insight:** ...
+```
+
+Every insight must cite at least one `fnd_NNN`.
+
+### Step 6: Write the report
+
+Write `outputs/report.md` and cite sources inline as `[src_NNN]`.
+
+Keep claims proportional to the evidence quality. If evidence conflicts, say so
+explicitly instead of smoothing it over.
+
+### Step 7: Audit the workspace
+
+Run a final audit:
+
+```bash
+uv run python scripts/workspace_info.py audit .
+```
+
+Fix broken references before you hand the report back.

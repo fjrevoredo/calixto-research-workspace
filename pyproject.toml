@@ -52,6 +52,7 @@ build-backend = "hatchling.build"
 packages = ["scripts", "providers", "tests"]
 
 [tool.hatch.build.targets.wheel.force-include]
+"runtime" = "runtime"
 "templates" = "templates"
 "docs" = "docs"
 "examples" = "examples"

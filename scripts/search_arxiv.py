@@ -13,7 +13,7 @@ Usage:
         [--sort-by relevance|submitted]     # sort criterion
         [--use-cache]                       # use cached results (golden runs)
         [--clear-cache]                     # delete cache before running
-        [--cache-dir tests/golden/cache]
+        [--cache-dir <path>]                # default: <workspace>/.calixto/cache
 
 Output: structured JSON to stdout.
 
@@ -73,10 +73,13 @@ from search_web import (
 
 log = logging.getLogger(__name__)
 
-DEFAULT_CACHE_DIR = _REPO_ROOT / "tests" / "golden" / "cache"
-
 # arXiv's official rate limit guideline
 ARXIV_DELAY_SECONDS = 3.5
+
+
+def default_cache_dir(workspace: Path) -> Path:
+    """Return the default cache directory for a standalone workspace."""
+    return workspace / ".calixto" / "cache"
 
 
 def _ensure_arxiv_client() -> Any:
@@ -376,14 +379,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--sort-by", choices=["relevance", "date"], default="relevance", help="Sort criterion (default: relevance).")
     parser.add_argument("--use-cache", action="store_true", help="Use cached search results if present.")
     parser.add_argument("--clear-cache", action="store_true", help="Delete cached search results before running.")
-    parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR), help="Cache directory.")
+    parser.add_argument("--cache-dir", default=None, help="Cache directory (default: <workspace>/.calixto/cache).")
     args = parser.parse_args(argv)
 
     if not args.query or not args.query.strip():
         emit_error("invalid_query", "query must be a non-empty string")
 
     workspace = workspace_path(args.workspace)
-    cache_dir = Path(args.cache_dir).resolve()
+    cache_dir = Path(args.cache_dir).resolve() if args.cache_dir else default_cache_dir(workspace)
 
     try:
         result = run_arxiv_search(

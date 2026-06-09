@@ -15,7 +15,7 @@ Usage:
         [--truncate 10000]                 # max words per source (0 = no limit)
         [--use-cache]                      # use cached search results (golden runs)
         [--clear-cache]                    # delete cache before running
-        [--cache-dir tests/golden/cache]   # custom cache directory
+        [--cache-dir <path>]               # default: <workspace>/.calixto/cache
 
 Output (stdout): JSON with status, sources_added, sources_skipped, source_ids,
 errors (if any), workspace path.
@@ -32,7 +32,7 @@ Architecture:
 See:
     - providers/search/base.py: SearchProvider interface
     - providers/scrape/base.py: ScrapeProvider interface
-    - skills/deep-research.md: workflow context
+    - skills/deep-research/SKILL.md: toolkit-side handoff into a workspace
 """
 
 from __future__ import annotations
@@ -74,8 +74,10 @@ from _common import (
 
 log = logging.getLogger(__name__)
 
-REPO_ROOT = _REPO_ROOT
-DEFAULT_CACHE_DIR = REPO_ROOT / "tests" / "golden" / "cache"
+
+def default_cache_dir(workspace: Path) -> Path:
+    """Return the default cache directory for a standalone workspace."""
+    return workspace / ".calixto" / "cache"
 
 
 # ---------------------------------------------------------------------------
@@ -523,14 +525,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--truncate", type=int, default=10000, help="Truncate sources to N words (0=no limit, default: 10000).")
     parser.add_argument("--use-cache", action="store_true", help="Use cached search results if present (for golden runs).")
     parser.add_argument("--clear-cache", action="store_true", help="Delete cached search results before running.")
-    parser.add_argument("--cache-dir", default=str(DEFAULT_CACHE_DIR), help="Cache directory (default: tests/golden/cache).")
+    parser.add_argument("--cache-dir", default=None, help="Cache directory (default: <workspace>/.calixto/cache).")
     args = parser.parse_args(argv)
 
     if not args.query or not args.query.strip():
         emit_error("invalid_query", "query must be a non-empty string")
 
     workspace = workspace_path(args.workspace)
-    cache_dir = Path(args.cache_dir).resolve()
+    cache_dir = Path(args.cache_dir).resolve() if args.cache_dir else default_cache_dir(workspace)
 
     if args.truncate < 0:
         emit_error("invalid_truncate", "--truncate must be >= 0")

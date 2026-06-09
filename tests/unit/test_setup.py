@@ -23,6 +23,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 SETUP_SH = REPO_ROOT / "setup.sh"
 SETUP_PS1 = REPO_ROOT / "setup.ps1"
+RUNTIME_SETUP_SH = REPO_ROOT / "runtime" / "workspace" / "setup.sh"
+RUNTIME_SETUP_PS1 = REPO_ROOT / "runtime" / "workspace" / "setup.ps1"
 
 
 def _is_windows() -> bool:
@@ -160,6 +162,47 @@ class TestSetupShPackageCheck:
             f"setup.sh has a syntax error: {result.stderr}"
         )
 
+    def test_runtime_setup_sh_verifies_ddgs(self) -> None:
+        if not _have_bash():
+            pytest.skip("bash not available")
+        text = RUNTIME_SETUP_SH.read_text(encoding="utf-8")
+        import re
+        pattern = re.compile(r"\bimport\s+[^\n;]*\bddgs\b")
+        assert pattern.search(text), (
+            "runtime/workspace/setup.sh verification step must import `ddgs`."
+        )
+
+    def test_runtime_setup_sh_syntax(self) -> None:
+        if not _have_bash():
+            pytest.skip("bash not available")
+        if _is_windows():
+            launcher_check = subprocess.run(
+                ["bash", "-lc", ":"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            stdout_lower = launcher_check.stdout.lower()
+            stderr_lower = launcher_check.stderr.lower()
+            if (
+                launcher_check.returncode != 0
+                or "rpc" in stderr_lower
+                or "windows subsystem for linux" in stdout_lower
+            ):
+                pytest.skip(
+                    "bash is the WSL launcher but no WSL distribution "
+                    "is installed; syntax check is not meaningful here"
+                )
+        result = subprocess.run(
+            ["bash", "-n"],
+            input=RUNTIME_SETUP_SH.read_text(encoding="utf-8"),
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"runtime/workspace/setup.sh has a syntax error: {result.stderr}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # setup.ps1 tests
@@ -275,4 +318,30 @@ class TestSetupPs1NativeExitCodes:
             f"setup.ps1 has {len(legacy_violations)} duckduckgo-search "
             f"references outside rename context: {legacy_violations}. "
             "The package is now `ddgs`."
+        )
+
+    def test_runtime_setup_ps1_syntax(self) -> None:
+        if not _have_pwsh():
+            pytest.skip("pwsh not available")
+        result = subprocess.run(
+            [
+                "pwsh", "-NoProfile", "-Command",
+                f"$null = [System.Management.Automation.PSParser]::Tokenize("
+                f"(Get-Content -Raw '{RUNTIME_SETUP_PS1}'), [ref]$null); 'OK'"
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, (
+            f"runtime/workspace/setup.ps1 has a syntax error: {result.stderr}"
+        )
+
+    def test_runtime_setup_ps1_verifies_ddgs(self) -> None:
+        if not _have_pwsh():
+            pytest.skip("pwsh not available")
+        text = RUNTIME_SETUP_PS1.read_text(encoding="utf-8")
+        import re
+        pattern = re.compile(r"\bimport\s+[^\n;]*\bddgs\b")
+        assert pattern.search(text), (
+            "runtime/workspace/setup.ps1 verification step must import `ddgs`."
         )

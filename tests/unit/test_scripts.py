@@ -8,6 +8,7 @@ in tests/golden/run.py.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -20,6 +21,8 @@ SCRIPTS_DIR = REPO_ROOT / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+from runtime_bundle import iter_runtime_entries
+
 
 def run_script(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
     """Run a Calixto script and return the completed process."""
@@ -29,6 +32,45 @@ def run_script(*args: str, cwd: Path | None = None) -> subprocess.CompletedProce
         capture_output=True,
         text=True,
     )
+
+
+def build_cache_file(
+    cache_dir: Path, provider: str, query: str, max_results: int, **params: str
+) -> Path:
+    """Write a cache file using the same key format search_web.py uses."""
+    import hashlib
+
+    parts = [f"provider={provider}", f"query={query}", f"max_results={max_results}"]
+    for k in sorted(params):
+        v = params[k]
+        if v is None or v == "":
+            continue
+        parts.append(f"{k}={v}")
+    raw = "|".join(parts)
+    key = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    cache_file = cache_dir / provider / f"{key}.json"
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(
+        json.dumps(
+            {
+                "provider": provider,
+                "query": query,
+                "max_results": max_results,
+                "params": {k: v for k, v in params.items() if v not in (None, "")},
+                "results": [
+                    {
+                        "url": "https://example.com/cached",
+                        "title": "Cached Title",
+                        "snippet": "Cached snippet",
+                        "score": 0.0,
+                        "metadata": {},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return cache_file
 
 
 class TestInitWorkspace:
@@ -42,8 +84,15 @@ class TestInitWorkspace:
         assert result.returncode == 0
         out = json.loads(result.stdout)
         assert out["status"] == "ok"
-        assert (tmp_path / "my-test" / "config.json").exists()
-        assert (tmp_path / "my-test" / "sources" / "index.json").exists()
+        workspace = tmp_path / "my-test"
+        assert workspace.joinpath("config.json").exists()
+        assert workspace.joinpath("sources", "index.json").exists()
+        assert workspace.joinpath("AGENTS.md").exists()
+        assert workspace.joinpath("scripts", "search_web.py").exists()
+        assert workspace.joinpath("providers", "search", "duckduckgo.py").exists()
+        assert workspace.joinpath("skills", "deep-research", "SKILL.md").exists()
+        assert out["workspace_layout"] == "standalone"
+        assert Path(out["runtime_manifest"]).name == "workspace-manifest.json"
 
     def test_rejects_invalid_name(self, tmp_path: Path) -> None:
         result = run_script(
@@ -74,12 +123,80 @@ class TestInitWorkspace:
         cfg = json.loads((tmp_path / "cfg-test" / "config.json").read_text())
         assert "name" in cfg
         assert cfg["name"] == "cfg-test"
+        assert cfg["workspace_schema_version"] == 2
+        assert cfg["workspace_layout"] == "standalone"
+        assert cfg["runtime_manifest_version"] == 1
+        assert cfg["runtime_bundle_version"]
+        assert cfg["toolkit_version_created_with"]
         assert "scope" in cfg
         assert "providers" in cfg
         assert "next_source_id" in cfg
         assert "searches" in cfg
         assert "created_at" in cfg
         assert "updated_at" in cfg
+
+    def test_bundle_matches_manifest_and_excludes_dev_only_assets(self, tmp_path: Path) -> None:
+        run_script(str(SCRIPTS_DIR / "init_workspace.py"), "manifest-test", "--path", str(tmp_path))
+        workspace = tmp_path / "manifest-test"
+
+        for entry in iter_runtime_entries():
+            assert workspace.joinpath(entry["destination"]).exists(), entry["destination"]
+
+        for unexpected in (
+            "docs",
+            "tests",
+            "templates",
+            "examples",
+            "adapters",
+            "install.sh",
+            "install.ps1",
+            "requirements.md",
+            "PHILOSOPHY.md",
+            "skills/create-skill",
+            "skills/integrate-tool",
+            "scripts/init_workspace.py",
+            "scripts/installer_core.py",
+        ):
+            assert not workspace.joinpath(unexpected).exists(), unexpected
+
+        workspace_agents = workspace.joinpath("AGENTS.md").read_text(encoding="utf-8")
+        assert "parent toolkit checkout" in workspace_agents.lower()
+        for skill_name in ("deep-research", "literature-review"):
+            skill_text = workspace.joinpath("skills", skill_name, "SKILL.md").read_text(encoding="utf-8")
+            assert "repo root" not in skill_text.lower()
+            assert "workspaces/<slug>" not in skill_text
+            assert "scripts/init_workspace.py" not in skill_text
+
+    def test_copied_workspace_runs_search_from_workspace_root(self, tmp_path: Path) -> None:
+        run_script(str(SCRIPTS_DIR / "init_workspace.py"), "portable", "--path", str(tmp_path))
+        source_workspace = tmp_path / "portable"
+        copied_workspace = tmp_path / "copied" / "portable"
+        copied_workspace.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(source_workspace, copied_workspace)
+
+        default_cache_dir = copied_workspace / ".calixto" / "cache"
+        build_cache_file(default_cache_dir, "duckduckgo", "portable query", 2)
+
+        result = run_script(
+            str(copied_workspace / "scripts" / "search_web.py"),
+            "portable query",
+            "--workspace",
+            ".",
+            "--max-results",
+            "2",
+            "--no-scrape",
+            "--use-cache",
+            cwd=copied_workspace,
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "ok"
+        assert out["workspace"] == str(copied_workspace.resolve())
+        source_file = copied_workspace / "sources" / "web" / "src_001.md"
+        assert source_file.exists()
+        meta, _ = parse_frontmatter_helper(source_file.read_text(encoding="utf-8"))
+        assert meta["url"] == "https://example.com/cached"
+        assert not (copied_workspace / "scripts" / "init_workspace.py").exists()
 
 
 class TestWorkspaceInfo:
@@ -282,39 +399,7 @@ class TestSearchWebCaching:
 
     def _build_cache_file(self, cache_dir: Path, provider: str, query: str, max_results: int, **params: str) -> Path:
         """Write a cache file using the same key format search_web.py uses."""
-        import hashlib
-        # Mirror search_web.cache_key: key is sha256 over
-        # "provider=...|query=...|max_results=...|k=v|..." with sorted params.
-        parts = [f"provider={provider}", f"query={query}", f"max_results={max_results}"]
-        for k in sorted(params):
-            v = params[k]
-            if v is None or v == "":
-                continue
-            parts.append(f"{k}={v}")
-        raw = "|".join(parts)
-        key = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-        cache_file = cache_dir / provider / f"{key}.json"
-        cache_file.parent.mkdir(parents=True, exist_ok=True)
-        cache_file.write_text(
-            json.dumps(
-                {
-                    "provider": provider,
-                    "query": query,
-                    "max_results": max_results,
-                    "results": [
-                        {
-                            "url": "https://example.com/cached",
-                            "title": "Cached Title",
-                            "snippet": "Cached snippet",
-                            "score": 0.0,
-                            "metadata": {},
-                        }
-                    ],
-                }
-            ),
-            encoding="utf-8",
-        )
-        return cache_file
+        return build_cache_file(cache_dir, provider, query, max_results, **params)
 
     def test_uses_cache_when_present(self, tmp_path: Path) -> None:
         # 1. Create a workspace

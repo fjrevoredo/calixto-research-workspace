@@ -1,0 +1,24 @@
+[project]
+name = "calixto-workspace-runtime"
+version = "0.1.0"
+description = "Standalone Calixto research workspace runtime snapshot."
+requires-python = ">=3.11"
+dependencies = [
+    "crawl4ai>=0.4.0",
+    "ddgs>=9.0.0",
+    "arxiv>=2.1.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+brave = [
+    "requests>=2.31.0",
+]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+]
+
+[tool.uv]
+package = false

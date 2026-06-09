@@ -29,6 +29,7 @@ WORKSPACE_MARKERS = (
     "PHILOSOPHY.md",
     "requirements.md",
     "AGENTS.md",
+    "runtime",
     "setup.sh",
     "setup.ps1",
     "templates",
@@ -72,6 +73,7 @@ LEGACY_MANAGED_ALLOWLIST = {
     "providers",
     "pyproject.toml",
     "requirements.md",
+    "runtime",
     "scripts",
     "setup.ps1",
     "setup.sh",
@@ -244,7 +246,7 @@ def _validate_source_contract(source_root: Path, mode: str) -> None:
     if missing:
         joined = ", ".join(missing)
         raise InstallerError(
-            f"Staged source is missing required workspace markers: {joined}"
+            f"Staged source is missing required toolkit markers: {joined}"
         )
     if (source_root / MANAGED_ENTRIES_FILENAME).exists():
         raise InstallerError(
@@ -515,7 +517,7 @@ def apply_fresh_install(source_root: Path, target_dir: Path) -> None:
     if missing:
         joined = ", ".join(missing)
         raise InstallerError(
-            f"Fresh install did not produce a valid workspace. Missing: {joined}"
+            f"Fresh install did not produce a valid toolkit root. Missing: {joined}"
         )
     _write_managed_entries(target_dir, managed_names)
 
@@ -575,7 +577,7 @@ def apply_update(source_root: Path, target_dir: Path) -> None:
         if missing:
             joined = ", ".join(missing)
             raise InstallerError(
-                f"Updated workspace is missing required markers: {joined}"
+                f"Updated toolkit root is missing required markers: {joined}"
             )
         _assert_protected_unchanged(
             target_dir,

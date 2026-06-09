@@ -1,5 +1,5 @@
 """
-init_workspace.py: Create a new research workspace from the template.
+init_workspace.py: Create a new standalone research workspace snapshot.
 
 Usage:
     python scripts/init_workspace.py <name> [--path DIR]
@@ -7,8 +7,8 @@ Usage:
 What it does:
     1. Validates the name is a valid slug
     2. Verifies the workspace does not already exist
-    3. Copies templates/workspace/ to <path>/<name>/
-    4. Updates config.json with the workspace name and current timestamp
+    3. Copies the standalone runtime bundle to <path>/<name>/
+    4. Updates config.json with the workspace name, metadata, and timestamps
     5. Prints a structured JSON status object to stdout
 
 Architecture:
@@ -21,7 +21,6 @@ Architecture:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -39,24 +38,12 @@ from _common import (
     utcnow_iso,
     workspace_path,
 )
-
-REPO_ROOT = Path(__file__).resolve().parent.parent
-TEMPLATE_DIR = REPO_ROOT / "templates" / "workspace"
-
-
-def copy_template(src: Path, dst: Path) -> None:
-    """Recursively copy the workspace template from src to dst."""
-    if not src.exists():
-        raise FileNotFoundError(f"workspace template not found at {src}")
-    dst.mkdir(parents=True, exist_ok=False)
-    for item in src.iterdir():
-        target = dst / item.name
-        if item.is_dir():
-            copy_template(item, target)
-        else:
-            # Read text and write to preserve newlines
-            text = item.read_text(encoding="utf-8")
-            target.write_text(text, encoding="utf-8")
+from runtime_bundle import (
+    RUNTIME_MANIFEST_PATH,
+    copy_runtime_bundle,
+    runtime_bundle_version,
+    standalone_workspace_metadata,
+)
 
 
 def init_workspace(name: str, path: Path) -> dict:
@@ -65,7 +52,7 @@ def init_workspace(name: str, path: Path) -> dict:
     Raises:
         ValueError: invalid name
         FileExistsError: workspace already exists
-        FileNotFoundError: template missing
+        FileNotFoundError: runtime bundle source missing
     """
     if not is_valid_slug(name):
         emit_error(
@@ -82,15 +69,15 @@ def init_workspace(name: str, path: Path) -> dict:
         )
 
     try:
-        copy_template(TEMPLATE_DIR, target)
+        copy_runtime_bundle(target)
     except FileExistsError:
         # Race condition: another process created it between our check and copy
         emit_error("workspace_exists", f"workspace '{name}' was created concurrently at {target}.")
 
-    # Update config.json with the actual name and timestamps
-    config_path = target / "config.json"
+    # Update config.json with the actual name, runtime metadata, and timestamps.
     config = load_workspace_config(target)
     config["name"] = name
+    config.update(standalone_workspace_metadata())
     config["created_at"] = utcnow_iso()
     config["updated_at"] = utcnow_iso()
     save_workspace_config(target, config)
@@ -99,13 +86,16 @@ def init_workspace(name: str, path: Path) -> dict:
         "workspace": str(target),
         "name": name,
         "path": str(path),
-        "template": str(TEMPLATE_DIR),
+        "runtime_manifest": str(RUNTIME_MANIFEST_PATH),
+        "workspace_layout": config["workspace_layout"],
+        "workspace_schema_version": config["workspace_schema_version"],
+        "runtime_bundle_version": runtime_bundle_version(),
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Create a new Calixto research workspace from the template.",
+        description="Create a new standalone Calixto research workspace snapshot.",
         prog="init_workspace",
     )
     parser.add_argument("name", help="Workspace name (lowercase, hyphens, 2-64 chars).")
@@ -128,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     except SystemExit:
         raise
     except FileNotFoundError as e:
-        emit_error("template_missing", str(e))
+        emit_error("runtime_bundle_missing", str(e))
     except Exception as e:
         emit_error("init_failed", f"unexpected error: {e}")
 

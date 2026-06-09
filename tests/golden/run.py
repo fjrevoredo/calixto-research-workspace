@@ -145,6 +145,7 @@ def run_golden(
     # Step 2: run each search
     print(f"[2/3] Running {len(searches)} searches", file=sys.stderr)
     search_results: list[dict] = []
+    golden_cache_dir = REPO_ROOT / "tests" / "golden" / "cache"
     for s in searches:
         provider = s.get("provider", "duckduckgo")
         query = s.get("query")
@@ -163,6 +164,8 @@ def run_golden(
                 str(workspace_path),
                 "--max-results",
                 str(max_results),
+                "--cache-dir",
+                str(golden_cache_dir),
             ]
             if use_cache:
                 cmd.append("--use-cache")
@@ -178,6 +181,8 @@ def run_golden(
                 str(max_results),
                 "--truncate",
                 str(truncate),
+                "--cache-dir",
+                str(golden_cache_dir),
             ]
             if not do_scrape:
                 cmd.append("--no-scrape")

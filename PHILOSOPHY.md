@@ -1,8 +1,14 @@
 # PHILOSOPHY.md
 
-_Last updated: 2026-06-06, applies to v0.1.0+_
+_Last updated: 2026-06-09, applies to v0.1.0+_
 
 This document defines the guiding principles for Calixto Research Workspace. Every feature decision, architectural choice, and contribution must align with these values. When in doubt, refer back here.
+
+The architectural boundary is explicit:
+
+- the repository root is the toolkit source and factory
+- each generated workspace is a standalone research runtime snapshot
+- toolkit updates affect future workspaces only, not existing ones
 
 ---
 
@@ -48,7 +54,7 @@ This project is designed to be understood, modified, extended, and maintained by
 
 The agent operates in one of two modes at any given time. These modes control what context the agent loads, keeping it focused and preventing information overload.
 
-- **Research mode** (default): The agent is performing research inside a workspace. It loads only the skill it's following and has access to the scripts and workspace files. It does NOT load internal architecture docs, provider implementation details, meta-skills, or development guides. The agent's job is to search, collect, analyze, and report, not to think about how the tools work internally.
+- **Research mode** (default): The agent is performing research inside a standalone workspace snapshot. It loads only the skill it's following and has access to the workspace-local scripts and workspace files. It does NOT load toolkit architecture docs, provider implementation details, meta-skills, or development guides. The agent's job is to search, collect, analyze, and report, not to think about how the tools work internally.
 
 - **Developer mode**: The agent is modifying, extending, or maintaining the toolkit itself. It loads the full documentation: architecture, provider interfaces, meta-skills, ADRs, test infrastructure, and contribution guidelines. The agent's job is to understand the codebase deeply enough to make correct changes.
 
@@ -87,10 +93,10 @@ The agent operates in one of two modes at any given time. These modes control wh
 All state lives in files inside a workspace folder. No databases, no servers, no hidden state, no magic.
 
 **What this means:**
-- A workspace is a folder with markdown files, JSON files, and a clear structure
+- A workspace is a self-contained folder with markdown files, JSON files, bundled runtime assets, and a clear structure
 - Any tool that can read files can inspect a workspace
 - Git works as version control, diff tool, and collaboration layer
-- If our repo disappears tomorrow, every workspace remains fully usable, it's just files
+- If our repo disappears tomorrow, every workspace remains usable after local dependency setup, because the runtime assets are copied into the workspace itself
 - Configuration, search history, sources, notes, and reports are all plain text
 
 **File format choices:**
@@ -166,7 +172,7 @@ We don't pretend this is lightweight. We document the real cost of every depende
 |---|---|
 | Crawl4AI (~50MB) | Best FOSS web-to-markdown pipeline available |
 | Playwright + Chromium (~450MB) | Required by Crawl4AI for JS-rendered pages |
-| duckduckgo-search (~1MB) | Free search with no API key |
+| ddgs (~1MB) | Free search with no API key |
 | arxiv (~1MB) | Only sane way to query arXiv programmatically |
 
 **When considering a new dependency, ask:**
@@ -182,7 +188,7 @@ We don't pretend this is lightweight. We document the real cost of every depende
 Users should be able to adopt this toolkit in minutes and abandon it at any time without losing their work.
 
 **Easy in:**
-- Clone the repo, run `setup.sh`, create a workspace, start searching
+- Clone the toolkit, run `setup.sh`, create a workspace snapshot, enter it, and start searching there
 - No accounts, no API keys required for basic use
 - Skills tell the agent what to do. No configuration needed
 - Works with whatever coding agent the user already has
@@ -513,13 +519,13 @@ No existing code needs to change. The new provider slots into the existing inter
 [1/4] Installing uv...
 [2/4] Installing Python dependencies...
       - crawl4ai (50MB)
-      - duckduckgo-search (1MB)
+      - ddgs (1MB)
       - arxiv (1MB)
 [3/4] Installing Playwright browsers...
       - Chromium (~450MB), this may take a few minutes
 [4/4] Verifying installation...
       ✓ crawl4ai ready
-      ✓ duckduckgo-search ready
+      ✓ ddgs ready
       ✓ Chromium ready
 
 Total installed: ~500MB
@@ -530,7 +536,7 @@ Total installed: ~500MB
 [project]
 dependencies = [
     "crawl4ai",           # Web scraping: no comparable FOSS alternative at this quality
-    "duckduckgo-search",  # Free web search: 1MB, no API key
+    "ddgs",               # Free web search: 1MB, no API key
     "arxiv",              # arXiv API: 1MB, official client
 ]
 

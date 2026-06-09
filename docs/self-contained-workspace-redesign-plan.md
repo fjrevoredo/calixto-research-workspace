@@ -21,6 +21,7 @@ Redesign Calixto so the repository root is the toolkit source and factory, while
 
 - Redefine the root repository as developer/toolkit content only.
 - Define the exact runtime asset set that must be copied into each new workspace.
+- Define the dependency manifest and workspace-local bootstrap assets required for a copied workspace to become runnable elsewhere.
 - Change workspace creation so it materializes a standalone runtime snapshot.
 - Refactor research-facing scripts and docs to run from inside a copied workspace.
 - Simplify installer and update behavior so it manages the toolkit root only.
@@ -67,7 +68,7 @@ The current implementation still assumes the root repository owns most runtime a
   2. Define a workspace as a self-contained research project snapshot with its own runtime-facing docs, skills, scripts, and state files.
   3. State explicitly that root updates affect only future workspaces unless a separate migration command is used.
 - Validation: Inspect updated docs and confirm they contain the three explicit statements above without describing in-place updates of existing workspaces.
-- Notes: Update at minimum `AGENTS.md`, `PHILOSOPHY.md`, and any user-facing installer/setup docs that currently blur the boundary.
+- Notes: Update at minimum `README.md`, `AGENTS.md`, `PHILOSOPHY.md`, `requirements.md`, installer/setup docs, relevant adapter docs, and example docs that currently blur the boundary.
 
 #### Task 1.2: Define The Workspace Runtime Asset Manifest
 
@@ -75,10 +76,10 @@ The current implementation still assumes the root repository owns most runtime a
 - Objective: Produce a concrete list of files and directories that every standalone workspace must include.
 - Steps:
   1. Audit current root assets and classify each as developer-only, research-runtime, or template-only.
-  2. Create a manifest document or machine-readable manifest listing the workspace runtime payload.
-  3. Include the research-facing `AGENTS.md`, runtime scripts, providers, skills, workspace seed files, and any bootstrap helpers that must live inside the workspace.
-- Validation: The manifest names every copied top-level workspace asset and excludes developer-only assets such as ADRs, golden tests, and maintainer meta-skills.
-- Notes: Do not leave the runtime bundle implicit in `init_workspace.py`.
+  2. Create a machine-readable manifest checked into the repository and, if useful, a short human-readable companion doc describing it.
+  3. Include the research-facing `AGENTS.md`, runtime scripts, providers, research skills, dependency manifest (`pyproject.toml` or equivalent), workspace seed files, and any workspace-local bootstrap helpers that must live inside the workspace.
+- Validation: The manifest names every copied top-level workspace asset, excludes developer-only assets such as ADRs, golden tests, and maintainer meta-skills, and is specific enough to drive both initialization and tests.
+- Notes: The same manifest should drive initialization logic and bundle-content tests; do not leave the runtime bundle implicit in `init_workspace.py`.
 
 #### Task 1.3: Define Workspace Metadata And Compatibility Rules
 
@@ -135,10 +136,10 @@ The current implementation still assumes the root repository owns most runtime a
 - Status: TO BE DONE
 - Objective: Ensure a copied workspace has its own setup/bootstrap entrypoint instead of relying on root setup scripts.
 - Steps:
-  1. Add workspace-local setup helpers or bootstrap commands that install or verify required Python dependencies for the standalone workspace.
+  1. Add workspace-local setup helpers or bootstrap commands plus the dependency manifest they consume to install or verify required Python dependencies for the standalone workspace.
   2. Make the bootstrap logic relative to the workspace root, not the original repository root.
   3. Document how an agent or user should initialize a copied workspace after moving it elsewhere.
-- Validation: The plan identifies a concrete workspace-local bootstrap command and its documentation lives inside the standalone workspace payload.
+- Validation: The plan identifies a concrete workspace-local bootstrap command, the required dependency manifest is included with the workspace payload, and the usage documentation lives inside the standalone workspace payload.
 - Notes: This task does not require shipping a virtualenv inside the workspace.
 
 #### Task 2.4: Create Workspace-Local Research Entry Docs
@@ -264,7 +265,7 @@ The current implementation still assumes the root repository owns most runtime a
 - Objective: Prove that a new workspace contains the correct runtime payload and metadata.
 - Steps:
   1. Add tests for `init_workspace.py` that verify the new runtime bundle contents.
-  2. Verify required runtime files, skills, scripts, and metadata fields are present.
+  2. Verify required runtime files, skills, scripts, bootstrap helpers, dependency metadata, and workspace metadata fields are present.
   3. Verify developer-only assets are absent from the standalone workspace.
 - Validation: `python -m pytest -q` includes passing tests that assert the runtime bundle contents and exclusions.
 - Notes: Prefer deterministic file-list assertions over broad smoke tests alone.
@@ -275,10 +276,10 @@ The current implementation still assumes the root repository owns most runtime a
 - Objective: Prove that a workspace still works after being moved outside the repository.
 - Steps:
   1. Create an integration test that initializes a workspace, copies it to a directory outside the repository tree, and runs its bootstrap/runtime commands there.
-  2. Exercise at least one primary research workflow command from the copied workspace.
+  2. Exercise at least one primary research workflow command from the copied workspace using a deterministic test fixture, stub, or provider path rather than live-network-only behavior.
   3. Verify the copied workspace does not import from or resolve paths back into the original repository.
 - Validation: A dedicated copied-workspace test passes from a temp directory that is not inside the toolkit root.
-- Notes: This is the core test for the user’s original product vision.
+- Notes: This is the core test for the user’s original product vision; avoid making it depend on live search results or unstable network conditions.
 
 #### Task 5.3: Add Toolkit-Root Update Tests That Ignore Existing Workspaces
 
@@ -296,8 +297,8 @@ The current implementation still assumes the root repository owns most runtime a
 - Status: TO BE DONE
 - Objective: Keep repository validation aligned with the redesigned runtime boundary.
 - Steps:
-  1. Update any skill validators, examples, and golden/fixture assumptions affected by the new workspace shape.
-  2. Add checks that the standalone workspace entry docs and bundled skills remain internally consistent.
+  1. Update root docs, workspace docs, adapter docs, examples, skill validators, and golden/fixture assumptions affected by the new workspace shape.
+  2. Add checks that the standalone workspace entry docs and bundled skills remain internally consistent and do not reference missing root-only paths.
   3. Ensure CI covers the new snapshot and copied-workspace tests.
 - Validation: Validation tooling passes with the new workspace shape, and CI includes the standalone workspace boundary tests.
 - Notes: Do not let examples or validators silently preserve the old contract.
@@ -316,9 +317,8 @@ The current implementation still assumes the root repository owns most runtime a
   1. Inspect the worktree for temporary documentation, one-off scripts, scratch tests, generated data, logs, and obsolete plan fragments.
   2. Remove only artifacts that are not part of the intended final repository state.
   3. Keep maintainable tests, fixtures, docs, and generated files that are part of the repository contract.
-  4. Update the project changelog or release notes entry if the repository maintains one for user-visible architectural changes.
 - Validation: Worktree diff contains only intended final changes.
-- Notes: Do not remove user-provided files or unrelated worktree changes.
+- Notes: This repository does not currently maintain a dedicated changelog; capture user-visible architectural decisions in the highest-signal docs and the decision log instead. Do not remove user-provided files or unrelated worktree changes.
 
 #### Task 6.2: Final Verification
 
@@ -338,16 +338,17 @@ Run from a clean checkout after implementation:
 ```text
 python -m pytest -q
 python tests/validate_skills.py
-python scripts/init_workspace.py standalone-smoke --path <temp-dir>/calixto-smoke
-copy the generated workspace to a second directory outside the repo tree
-run the workspace-local bootstrap command there
-run at least one primary research command from inside the copied workspace
+python scripts/init_workspace.py standalone-smoke --path <temp-dir>
+copy <temp-dir>/standalone-smoke to a second directory outside the repo tree
+run the workspace-local bootstrap command defined in Milestone 2.3 there
+run at least one primary research command from inside the copied workspace, preferably against a deterministic test fixture or provider
 ```
 
 Manual verification checklist:
 
 - Root docs describe the toolkit as a factory and source repo, not the active research runtime.
 - A new workspace contains the runtime assets defined by the manifest and excludes developer-only assets.
+- A new workspace contains the dependency manifest and workspace-local bootstrap helper required to become runnable elsewhere.
 - The copied workspace does not resolve runtime paths back into the original repository.
 - Updating the toolkit root does not mutate existing workspaces.
 - Legacy-workspace behavior is documented explicitly.

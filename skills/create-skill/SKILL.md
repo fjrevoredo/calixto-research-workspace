@@ -41,7 +41,12 @@ skills/<skill-name>/
 `-- assets/         # Optional: templates, images, lookup tables
 ```
 
-For Calixto, most skills reference the scripts at the repo root (`scripts/`) and do not bundle their own. Reserve the skill-local `scripts/` directory for logic that is specific to one skill and reused across many tasks.
+For Calixto, skill context depends on where the skill lives. Toolkit-side skills
+at the repo root can reference toolkit scripts such as `scripts/init_workspace.py`.
+Workspace runtime skills should reference the bundled workspace-local scripts and
+must not assume the parent toolkit checkout exists. Reserve a skill-local
+`scripts/` directory for logic that is specific to one skill and reused across
+many tasks.
 
 ## SKILL.md Format
 
@@ -108,7 +113,10 @@ metadata:
    - Keep total length under 500 lines and under 5,000 tokens
    - Move detailed reference material to `references/` if it would otherwise push the file over 500 lines
 
-7. **Reference repo-root scripts explicitly.** The Calixto skills reference scripts at the repo root. Include the exact command form: `python scripts/search_web.py "query" --workspace <path> --max-results 10`.
+7. **Reference the correct runtime boundary explicitly.** Toolkit-side skills may
+   reference repo-root commands such as `uv run python scripts/init_workspace.py <slug>`.
+   Workspace runtime skills should reference bundled commands such as
+   `uv run python scripts/search_web.py "query" --workspace . --max-results 10`.
 
 8. **Define ID conventions if needed.** If the skill introduces new traceable items (e.g., `comp_NNN` for a competitor), document the prefix and the format in the skill.
 

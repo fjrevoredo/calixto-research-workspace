@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "workspace_schema_version": 2,
+  "workspace_layout": "standalone",
+  "entries": [
+    {
+      "kind": "file",
+      "source": "runtime/workspace/AGENTS.md",
+      "destination": "AGENTS.md"
+    },
+    {
+      "kind": "file",
+      "source": "runtime/workspace/.gitignore",
+      "destination": ".gitignore"
+    },
+    {
+      "kind": "file",
+      "source": ".python-version",
+      "destination": ".python-version"
+    },
+    {
+      "kind": "file",
+      "source": "runtime/workspace/pyproject.toml",
+      "destination": "pyproject.toml"
+    },
+    {
+      "kind": "file",
+      "source": "runtime/workspace/setup.sh",
+      "destination": "setup.sh"
+    },
+    {
+      "kind": "file",
+      "source": "runtime/workspace/setup.ps1",
+      "destination": "setup.ps1"
+    },
+    {
+      "kind": "file",
+      "source": "LICENSE",
+      "destination": "LICENSE"
+    },
+    {
+      "kind": "directory",
+      "source": "runtime/workspace/skills/deep-research",
+      "destination": "skills/deep-research"
+    },
+    {
+      "kind": "directory",
+      "source": "runtime/workspace/skills/literature-review",
+      "destination": "skills/literature-review"
+    },
+    {
+      "kind": "directory",
+      "source": "providers",
+      "destination": "providers"
+    },
+    {
+      "kind": "file",
+      "source": "scripts/__init__.py",
+      "destination": "scripts/__init__.py"
+    },
+    {
+      "kind": "file",
+      "source": "scripts/_common.py",
+      "destination": "scripts/_common.py"
+    },
+    {
+      "kind": "file",
+      "source": "scripts/search_web.py",
+      "destination": "scripts/search_web.py"
+    },
+    {
+      "kind": "file",
+      "source": "scripts/search_arxiv.py",
+      "destination": "scripts/search_arxiv.py"
+    },
+    {
+      "kind": "file",
+      "source": "scripts/workspace_info.py",
+      "destination": "scripts/workspace_info.py"
+    },
+    {
+      "kind": "file",
+      "source": "templates/workspace/config.json",
+      "destination": "config.json"
+    },
+    {
+      "kind": "directory",
+      "source": "templates/workspace/notes",
+      "destination": "notes"
+    },
+    {
+      "kind": "directory",
+      "source": "templates/workspace/outputs",
+      "destination": "outputs"
+    },
+    {
+      "kind": "directory",
+      "source": "templates/workspace/sources",
+      "destination": "sources"
+    }
+  ]
+}
