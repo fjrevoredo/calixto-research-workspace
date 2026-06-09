@@ -16,6 +16,14 @@ warn() { printf '  !! %s\n' "$*" >&2; }
 fail() { printf '  XX %s\n' "$*" >&2; exit 1; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+repair_incomplete_venv() {
+    local venv_dir="$REPO_ROOT/.venv"
+    local venv_python="$venv_dir/bin/python"
+    if [ -d "$venv_dir" ] && [ ! -x "$venv_python" ]; then
+        warn "Detected incomplete virtual environment at '$venv_dir'. Removing it before uv sync."
+        rm -rf "$venv_dir" || fail "Failed to remove incomplete virtual environment at '$venv_dir'"
+    fi
+}
 
 # 1. Verify Python 3.11+
 log "Step 1/6: Verifying Python"
@@ -48,6 +56,7 @@ info "uv ready: $UV_VERSION"
 # 3. Sync dependencies via uv
 log "Step 3/6: Installing Python dependencies"
 info "This installs: crawl4ai (~50MB), ddgs (~5MB, renamed from duckduckgo-search), arxiv (~1MB), pyyaml (~1MB)"
+repair_incomplete_venv
 if ! uv sync --locked; then
     fail "uv sync failed. Check network and Python version."
 fi

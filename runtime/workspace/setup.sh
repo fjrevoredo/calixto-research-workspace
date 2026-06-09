@@ -12,6 +12,14 @@ warn() { printf '  !! %s\n' "$*" >&2; }
 fail() { printf '  XX %s\n' "$*" >&2; exit 1; }
 
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+repair_incomplete_venv() {
+    local venv_dir="$WORKSPACE_ROOT/.venv"
+    local venv_python="$venv_dir/bin/python"
+    if [ -d "$venv_dir" ] && [ ! -x "$venv_python" ]; then
+        warn "Detected incomplete virtual environment at '$venv_dir'. Removing it before uv sync."
+        rm -rf "$venv_dir" || fail "Failed to remove incomplete virtual environment at '$venv_dir'"
+    fi
+}
 
 log "Step 1/5: Verifying Python"
 if ! command_exists python3 && ! command_exists python; then
@@ -39,6 +47,7 @@ fi
 info "uv ready: $(uv --version)"
 
 log "Step 3/5: Syncing workspace dependencies"
+repair_incomplete_venv
 if ! uv sync --locked; then
     fail "uv sync failed. Check network access and Python version."
 fi

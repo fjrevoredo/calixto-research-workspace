@@ -19,6 +19,18 @@ function Write-Section { param($msg) Write-Host "`n=== $msg ===" -ForegroundColo
 function Write-Info    { param($msg) Write-Host "  -> $msg" -ForegroundColor Gray }
 function Write-Warn    { param($msg) Write-Host "  !! $msg" -ForegroundColor Yellow }
 function Write-Fail    { param($msg) Write-Host "  XX $msg" -ForegroundColor Red; exit 1 }
+function Repair-IncompleteVenv {
+    $venvDir = Join-Path $ScriptDir ".venv"
+    $venvPython = Join-Path $venvDir "Scripts\python.exe"
+    if ((Test-Path -LiteralPath $venvDir -PathType Container) -and -not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
+        Write-Warn "Detected incomplete virtual environment at '$venvDir'. Removing it before uv sync."
+        try {
+            Remove-Item -LiteralPath $venvDir -Recurse -Force
+        } catch {
+            Write-Fail "Failed to remove incomplete virtual environment at '$venvDir': $($_.Exception.Message)"
+        }
+    }
+}
 
 # 1. Check PowerShell execution policy
 Write-Section "Step 1/7: Checking PowerShell execution policy"
@@ -81,9 +93,10 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
 # native executable nonzero exits: $LASTEXITCODE is the source of truth.
 Write-Section "Step 4/7: Installing Python dependencies"
 Write-Info "This installs: crawl4ai (~50MB), ddgs (~5MB, renamed from duckduckgo-search), arxiv (~1MB), pyyaml (~1MB)"
-uv sync --locked 2>&1 | Out-Null
+Repair-IncompleteVenv
+$syncOutput = uv sync --locked 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Write-Fail "uv sync failed (rc=$LASTEXITCODE). Check network and Python version."
+    Write-Fail "uv sync failed (rc=$LASTEXITCODE): $syncOutput"
 }
 Write-Info "Python dependencies installed"
 

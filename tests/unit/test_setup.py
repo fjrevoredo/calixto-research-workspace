@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,12 @@ def _have_bash() -> bool:
 
 def _have_pwsh() -> bool:
     return shutil.which("pwsh") is not None
+
+
+def _write_executable(path: Path, text: str) -> None:
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
+        handle.write(textwrap.dedent(text))
+    path.chmod(path.stat().st_mode | 0o111)
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +245,76 @@ class TestSetupShPackageCheck:
             f"runtime/workspace/setup.sh has a syntax error: {result.stderr}"
         )
 
+    @pytest.mark.parametrize("source_script", [SETUP_SH, RUNTIME_SETUP_SH])
+    def test_setup_sh_recovers_from_incomplete_venv(
+        self, tmp_path: Path, source_script: Path
+    ) -> None:
+        if not _have_bash():
+            pytest.skip("bash not available")
+        project_dir = tmp_path / "workspace"
+        project_dir.mkdir()
+        script_path = project_dir / "setup.sh"
+        with script_path.open("w", encoding="utf-8", newline="\n") as handle:
+            handle.write(source_script.read_text(encoding="utf-8"))
+        script_path.chmod(script_path.stat().st_mode | 0o111)
+
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir()
+        _write_executable(
+            fake_bin / "python3",
+            """#!/usr/bin/env bash
+            if [ "$1" = "-c" ]; then
+                echo "3.11"
+                exit 0
+            fi
+            if [ "$1" = "--version" ]; then
+                echo "Python 3.11.4"
+                exit 0
+            fi
+            echo "unexpected python args: $*" >&2
+            exit 1
+            """,
+        )
+        _write_executable(
+            fake_bin / "uv",
+            """#!/usr/bin/env bash
+            if [ "$1" = "--version" ]; then
+                echo "uv 0.0-test"
+                exit 0
+            fi
+            if [ "$1" = "sync" ]; then
+                if [ -d ".venv" ]; then echo "present" > .uv-sync-state; else echo "missing" > .uv-sync-state; fi
+                mkdir -p .venv/bin
+                : > .venv/bin/python
+                chmod +x .venv/bin/python
+                exit 0
+            fi
+            if [ "$1" = "run" ]; then
+                exit 0
+            fi
+            echo "unexpected uv args: $*" >&2
+            exit 1
+            """,
+        )
+
+        (project_dir / ".venv" / "bin").mkdir(parents=True)
+        result = subprocess.run(
+            ["bash", "./setup.sh"],
+            cwd=project_dir,
+            env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, (
+            f"{source_script.name} did not recover from an incomplete .venv:\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+        assert (project_dir / ".venv" / "bin" / "python").exists()
+        assert (project_dir / ".uv-sync-state").read_text(encoding="utf-8").strip() == "missing"
+        assert "Detected incomplete virtual environment" in result.stderr
+
 
 # ---------------------------------------------------------------------------
 # setup.ps1 tests
@@ -299,7 +376,8 @@ class TestSetupPs1NativeExitCodes:
         lines = text.splitlines()
         for i, line in enumerate(lines):
             stripped = line.split("#", 1)[0]
-            if "uv sync" in stripped and "if " not in stripped:
+            normalized = stripped.lstrip()
+            if normalized.startswith("uv sync") or normalized.startswith("$syncOutput = uv sync"):
                 # Look ahead for $LASTEXITCODE check
                 window = lines[i : i + 12]
                 window_text = "\n".join(window)
@@ -370,3 +448,62 @@ class TestSetupPs1NativeExitCodes:
         assert _imports_module(text, "ddgs"), (
             "runtime/workspace/setup.ps1 verification step must import `ddgs`."
         )
+
+    @pytest.mark.parametrize("source_script", [SETUP_PS1, RUNTIME_SETUP_PS1])
+    def test_setup_ps1_recovers_from_incomplete_venv(
+        self, tmp_path: Path, source_script: Path
+    ) -> None:
+        if not _have_pwsh():
+            pytest.skip("pwsh not available")
+        project_dir = tmp_path / "workspace"
+        project_dir.mkdir()
+        script_path = project_dir / "setup.ps1"
+        script_path.write_text(source_script.read_text(encoding="utf-8"), encoding="utf-8")
+
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir()
+        (project_dir / ".venv" / "Scripts").mkdir(parents=True)
+        (fake_bin / "python.cmd").write_text(
+            "@echo off\r\n"
+            "if \"%~1\"==\"--version\" (\r\n"
+            "  echo Python 3.11.4\r\n"
+            "  exit /b 0\r\n"
+            ")\r\n"
+            "echo unexpected python args: %* 1>&2\r\n"
+            "exit /b 1\r\n",
+            encoding="utf-8",
+        )
+        (fake_bin / "uv.cmd").write_text(
+            "@echo off\r\n"
+            "if \"%~1\"==\"--version\" (\r\n"
+            "  echo uv 0.0-test\r\n"
+            "  exit /b 0\r\n"
+            ")\r\n"
+            "if \"%~1\"==\"sync\" (\r\n"
+            "  if exist \".venv\" (echo present>\".uv-sync-state\") else (echo missing>\".uv-sync-state\")\r\n"
+            "  mkdir \".venv\\Scripts\" >nul 2>&1\r\n"
+            "  type nul > \".venv\\Scripts\\python.exe\"\r\n"
+            "  exit /b 0\r\n"
+            ")\r\n"
+            "if \"%~1\"==\"run\" exit /b 0\r\n"
+            "echo unexpected uv args: %* 1>&2\r\n"
+            "exit /b 1\r\n",
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(script_path)],
+            cwd=project_dir,
+            env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, (
+            f"{source_script.name} did not recover from an incomplete .venv:\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
+        )
+        assert (project_dir / ".venv" / "Scripts" / "python.exe").exists()
+        assert (project_dir / ".uv-sync-state").read_text(encoding="utf-8").strip() == "missing"
+        assert "Detected incomplete virtual environment" in result.stdout

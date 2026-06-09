@@ -15,6 +15,18 @@ function Write-Section { param($msg) Write-Host "`n=== $msg ===" -ForegroundColo
 function Write-Info    { param($msg) Write-Host "  -> $msg" -ForegroundColor Gray }
 function Write-Warn    { param($msg) Write-Host "  !! $msg" -ForegroundColor Yellow }
 function Write-Fail    { param($msg) Write-Host "  XX $msg" -ForegroundColor Red; exit 1 }
+function Repair-IncompleteVenv {
+    $venvDir = Join-Path $WorkspaceRoot ".venv"
+    $venvPython = Join-Path $venvDir "Scripts\python.exe"
+    if ((Test-Path -LiteralPath $venvDir -PathType Container) -and -not (Test-Path -LiteralPath $venvPython -PathType Leaf)) {
+        Write-Warn "Detected incomplete virtual environment at '$venvDir'. Removing it before uv sync."
+        try {
+            Remove-Item -LiteralPath $venvDir -Recurse -Force
+        } catch {
+            Write-Fail "Failed to remove incomplete virtual environment at '$venvDir': $($_.Exception.Message)"
+        }
+    }
+}
 
 Write-Section "Step 1/6: Checking PowerShell execution policy"
 $policy = Get-ExecutionPolicy -Scope CurrentUser
@@ -71,9 +83,10 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
 }
 
 Write-Section "Step 4/6: Syncing workspace dependencies"
-uv sync --locked
+Repair-IncompleteVenv
+$syncOutput = uv sync --locked 2>&1
 if ($LASTEXITCODE -ne 0) {
-    Write-Fail "uv sync failed (rc=$LASTEXITCODE). Check network access and Python version."
+    Write-Fail "uv sync failed (rc=$LASTEXITCODE): $syncOutput"
 }
 Write-Info "Workspace dependencies installed"
 
