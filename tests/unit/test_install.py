@@ -89,6 +89,52 @@ def test_fresh_install_copies_root_config_and_writes_managed_entries(
     assert_no_installer_artifacts(target)
 
 
+def test_fresh_install_retries_setup_once_after_incomplete_venv(tmp_path: Path) -> None:
+    require_unix_prereqs()
+    checkout = create_isolated_checkout(tmp_path)
+    remote = make_remote_git_repo(
+        checkout,
+        tmp_path / "remote.git",
+        add_text_files={
+            "setup.sh": """#!/usr/bin/env bash
+set -euo pipefail
+attempt_file="setup-attempts.txt"
+count=0
+if [ -f "$attempt_file" ]; then
+    count="$(cat "$attempt_file")"
+fi
+count="$((count + 1))"
+printf '%s' "$count" > "$attempt_file"
+venv_python=".venv/bin/python"
+if [ "$count" -eq 1 ]; then
+    mkdir -p "$(dirname "$venv_python")"
+    exit 1
+fi
+mkdir -p "$(dirname "$venv_python")"
+touch "$venv_python"
+chmod +x "$venv_python"
+""",
+        },
+    )
+    target = tmp_path / "install-target"
+    target.mkdir()
+
+    env = base_env()
+    env["CALIXTO_REPO_URL"] = str(remote)
+    result = invoke_unix_installer(
+        checkout,
+        target,
+        env,
+        args=["--non-interactive"],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (target / "setup-attempts.txt").read_text(encoding="utf-8") == "2"
+    assert (target / ".venv" / "bin" / "python").exists()
+    assert "Retrying once." in result.stderr
+    assert_no_installer_artifacts(target)
+
+
 def test_update_preserves_user_data_and_retires_removed_managed_entry(
     tmp_path: Path,
 ) -> None:

@@ -299,6 +299,38 @@ function New-StagingDirectory {
     return $path
 }
 
+function Test-IncompleteVenv {
+    param([string]$Root)
+    $venvDir = Join-Path $Root '.venv'
+    $venvPython = Join-Path $venvDir 'Scripts\python.exe'
+    return (Test-Path -LiteralPath $venvDir -PathType Container) -and -not (Test-Path -LiteralPath $venvPython -PathType Leaf)
+}
+
+function Get-CurrentPowerShellHost {
+    $candidate = Join-Path $PSHOME 'pwsh.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return $candidate
+    }
+    $candidate = Join-Path $PSHOME 'powershell.exe'
+    if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+        return $candidate
+    }
+    if (Get-Command pwsh -ErrorAction SilentlyContinue) {
+        return (Get-Command pwsh).Source
+    }
+    if (Get-Command powershell -ErrorAction SilentlyContinue) {
+        return (Get-Command powershell).Source
+    }
+    Write-Fail "Unable to locate a PowerShell executable to run setup.ps1."
+}
+
+function Invoke-SetupProcess {
+    param([string]$SetupPath)
+    $hostExe = Get-CurrentPowerShellHost
+    & $hostExe -ExecutionPolicy Bypass -File $SetupPath | Out-Host
+    return $LASTEXITCODE
+}
+
 function Invoke-SetupIfRequested {
     param([string]$Context)
     if ($SkipDeps -or $DryRun) {
@@ -309,12 +341,18 @@ function Invoke-SetupIfRequested {
         return
     }
     Write-Section "Running setup.ps1"
-    try {
-        & $setupPath
-    } catch {
-        Write-Fail "setup.ps1 failed during $Context. Toolkit files are present, but the environment is not ready."
+    $exitCode = Invoke-SetupProcess -SetupPath $setupPath
+    if ($exitCode -eq 0) {
+        return
     }
-    if ($LASTEXITCODE -ne 0) {
+    if (Test-IncompleteVenv -Root $TargetDir) {
+        Write-Warn "setup.ps1 left an incomplete virtual environment after a failed attempt. Retrying once."
+        $exitCode = Invoke-SetupProcess -SetupPath $setupPath
+        if ($exitCode -eq 0) {
+            return
+        }
+    }
+    if ($exitCode -ne 0) {
         Write-Fail "setup.ps1 failed during $Context. Toolkit files are present, but the environment is not ready."
     }
 }

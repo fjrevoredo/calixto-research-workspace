@@ -15,6 +15,56 @@ function Write-Section { param($msg) Write-Host "`n=== $msg ===" -ForegroundColo
 function Write-Info    { param($msg) Write-Host "  -> $msg" -ForegroundColor Gray }
 function Write-Warn    { param($msg) Write-Host "  !! $msg" -ForegroundColor Yellow }
 function Write-Fail    { param($msg) Write-Host "  XX $msg" -ForegroundColor Red; exit 1 }
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory)] [string] $FilePath,
+        [string[]] $Arguments = @()
+    )
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $process = Start-Process `
+            -FilePath $FilePath `
+            -ArgumentList $Arguments `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+        $stdout = if (Test-Path -LiteralPath $stdoutPath) {
+            Get-Content -LiteralPath $stdoutPath -Raw
+        } else {
+            ''
+        }
+        if ($null -eq $stdout) {
+            $stdout = ''
+        }
+        $stderr = if (Test-Path -LiteralPath $stderrPath) {
+            Get-Content -LiteralPath $stderrPath -Raw
+        } else {
+            ''
+        }
+        if ($null -eq $stderr) {
+            $stderr = ''
+        }
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Output = ($stdout + $stderr).TrimEnd("`r", "`n")
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+function Invoke-UvPythonCode {
+    param([Parameter(Mandatory)] [string] $Code)
+    $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("calixto-workspace-setup-" + [guid]::NewGuid().ToString("N") + ".py")
+    try {
+        Set-Content -LiteralPath $scriptPath -Value $Code -Encoding UTF8
+        return Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', $scriptPath)
+    } finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+}
 function Repair-IncompleteVenv {
     $venvDir = Join-Path $WorkspaceRoot ".venv"
     $venvPython = Join-Path $venvDir "Scripts\python.exe"
@@ -84,21 +134,21 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
 
 Write-Section "Step 4/6: Syncing workspace dependencies"
 Repair-IncompleteVenv
-$syncOutput = uv sync --locked 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "uv sync failed (rc=$LASTEXITCODE): $syncOutput"
+$syncResult = Invoke-NativeCapture -FilePath 'uv' -Arguments @('sync', '--locked')
+if ($syncResult.ExitCode -ne 0) {
+    Write-Fail "uv sync failed (rc=$($syncResult.ExitCode)): $($syncResult.Output)"
 }
 Write-Info "Workspace dependencies installed"
 
 Write-Section "Step 5/6: Installing Playwright Chromium"
 $chromiumOk = $false
-uv run crawl4ai-setup *> $null
-if ($LASTEXITCODE -eq 0) {
+$crawlSetup = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'crawl4ai-setup')
+if ($crawlSetup.ExitCode -eq 0) {
     $chromiumOk = $true
 } else {
     Write-Warn "crawl4ai-setup encountered an issue; falling back to playwright install chromium"
-    uv run python -m playwright install chromium
-    if ($LASTEXITCODE -eq 0) {
+    $playwrightInstall = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', '-m', 'playwright', 'install', 'chromium')
+    if ($playwrightInstall.ExitCode -eq 0) {
         $chromiumOk = $true
     } else {
         Write-Warn "Playwright Chromium install failed. Web scraping will not work until fixed."
@@ -107,11 +157,11 @@ if ($LASTEXITCODE -eq 0) {
 }
 
 Write-Section "Step 6/6: Verifying workspace runtime"
-$verifyOutput = uv run python -c "import crawl4ai, ddgs, arxiv, yaml; print('ok')" 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "Verification import failed: $verifyOutput"
+$verifyResult = Invoke-UvPythonCode -Code "import crawl4ai, ddgs, arxiv, yaml; print('ok')"
+if ($verifyResult.ExitCode -ne 0) {
+    Write-Fail "Verification import failed: $($verifyResult.Output)"
 }
-Write-Info "All required packages importable: $verifyOutput"
+Write-Info "All required packages importable: $($verifyResult.Output)"
 if (-not $chromiumOk) {
     Write-Fail "Chromium was not installed successfully. Web scraping is the default mode; without Chromium, search_web.py will not be able to fetch pages. Re-run with explicit: uv run python -m playwright install chromium"
 }

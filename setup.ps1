@@ -19,6 +19,56 @@ function Write-Section { param($msg) Write-Host "`n=== $msg ===" -ForegroundColo
 function Write-Info    { param($msg) Write-Host "  -> $msg" -ForegroundColor Gray }
 function Write-Warn    { param($msg) Write-Host "  !! $msg" -ForegroundColor Yellow }
 function Write-Fail    { param($msg) Write-Host "  XX $msg" -ForegroundColor Red; exit 1 }
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory)] [string] $FilePath,
+        [string[]] $Arguments = @()
+    )
+    $stdoutPath = [System.IO.Path]::GetTempFileName()
+    $stderrPath = [System.IO.Path]::GetTempFileName()
+    try {
+        $process = Start-Process `
+            -FilePath $FilePath `
+            -ArgumentList $Arguments `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+        $stdout = if (Test-Path -LiteralPath $stdoutPath) {
+            Get-Content -LiteralPath $stdoutPath -Raw
+        } else {
+            ''
+        }
+        if ($null -eq $stdout) {
+            $stdout = ''
+        }
+        $stderr = if (Test-Path -LiteralPath $stderrPath) {
+            Get-Content -LiteralPath $stderrPath -Raw
+        } else {
+            ''
+        }
+        if ($null -eq $stderr) {
+            $stderr = ''
+        }
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Output = ($stdout + $stderr).TrimEnd("`r", "`n")
+        }
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+function Invoke-UvPythonCode {
+    param([Parameter(Mandatory)] [string] $Code)
+    $scriptPath = Join-Path ([System.IO.Path]::GetTempPath()) ("calixto-setup-" + [guid]::NewGuid().ToString("N") + ".py")
+    try {
+        Set-Content -LiteralPath $scriptPath -Value $Code -Encoding UTF8
+        return Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', $scriptPath)
+    } finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+}
 function Repair-IncompleteVenv {
     $venvDir = Join-Path $ScriptDir ".venv"
     $venvPython = Join-Path $venvDir "Scripts\python.exe"
@@ -94,9 +144,9 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
 Write-Section "Step 4/7: Installing Python dependencies"
 Write-Info "This installs: crawl4ai (~50MB), ddgs (~5MB, renamed from duckduckgo-search), arxiv (~1MB), pyyaml (~1MB)"
 Repair-IncompleteVenv
-$syncOutput = uv sync --locked 2>&1
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "uv sync failed (rc=$LASTEXITCODE): $syncOutput"
+$syncResult = Invoke-NativeCapture -FilePath 'uv' -Arguments @('sync', '--locked')
+if ($syncResult.ExitCode -ne 0) {
+    Write-Fail "uv sync failed (rc=$($syncResult.ExitCode)): $($syncResult.Output)"
 }
 Write-Info "Python dependencies installed"
 
@@ -104,16 +154,16 @@ Write-Info "Python dependencies installed"
 Write-Section "Step 5/7: Installing Playwright + Chromium for Crawl4AI"
 Write-Info "This downloads Chromium (~450MB) and may take a few minutes"
 $chromiumOk = $false
-uv run crawl4ai-setup 2>&1 | Out-Null
-if ($LASTEXITCODE -eq 0) {
+$crawlSetup = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'crawl4ai-setup')
+if ($crawlSetup.ExitCode -eq 0) {
     $chromiumOk = $true
 } else {
-    Write-Warn "crawl4ai-setup returned rc=$LASTEXITCODE; falling back to direct playwright install"
-    uv run python -m playwright install chromium 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    Write-Warn "crawl4ai-setup returned rc=$($crawlSetup.ExitCode); falling back to direct playwright install"
+    $playwrightInstall = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', '-m', 'playwright', 'install', 'chromium')
+    if ($playwrightInstall.ExitCode -eq 0) {
         $chromiumOk = $true
     } else {
-        Write-Warn "Playwright Chromium install had issues (rc=$LASTEXITCODE)."
+        Write-Warn "Playwright Chromium install had issues (rc=$($playwrightInstall.ExitCode))."
     }
 }
 
@@ -131,11 +181,11 @@ except ImportError as e:
     print(f"Import failed: {e}", file=sys.stderr)
     sys.exit(1)
 '@
-uv run python -c $verifyCode 2>&1 | Tee-Object -Variable verifyOutput | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "Verification failed (rc=$LASTEXITCODE): $verifyOutput"
+$verifyResult = Invoke-UvPythonCode -Code $verifyCode
+if ($verifyResult.ExitCode -ne 0) {
+    Write-Fail "Verification failed (rc=$($verifyResult.ExitCode)): $($verifyResult.Output)"
 }
-Write-Info $verifyOutput
+Write-Info $verifyResult.Output
 
 # 6b. Verify Chromium is installed and launchable. The default
 # scraping provider (Crawl4AI / Playwright) needs a working browser;
@@ -156,9 +206,9 @@ except Exception as e:
     print(f"launch_failed: {e}", file=sys.stderr)
     sys.exit(1)
 '@
-uv run python -c $launchCode 2>&1 | Tee-Object -Variable launchOutput | Out-Null
-if ($LASTEXITCODE -ne 0) {
-    Write-Fail "Chromium install completed but the browser failed to launch (rc=$LASTEXITCODE): $launchOutput"
+$launchResult = Invoke-UvPythonCode -Code $launchCode
+if ($launchResult.ExitCode -ne 0) {
+    Write-Fail "Chromium install completed but the browser failed to launch (rc=$($launchResult.ExitCode)): $($launchResult.Output)"
 }
 Write-Info "Chromium launch check passed"
 

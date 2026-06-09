@@ -90,6 +90,87 @@ def test_fresh_install_copies_root_config_and_writes_managed_entries(
     assert_no_installer_artifacts(target)
 
 
+def test_fresh_install_retries_setup_once_after_incomplete_venv(
+    tmp_path: Path,
+) -> None:
+    require_windows_prereqs()
+    checkout = create_isolated_checkout(tmp_path)
+    remote = make_remote_git_repo(
+        checkout,
+        tmp_path / "remote.git",
+        add_text_files={
+            "setup.ps1": """
+#!/usr/bin/env pwsh
+$attemptFile = Join-Path (Get-Location) 'setup-attempts.txt'
+$count = 0
+if (Test-Path -LiteralPath $attemptFile) {
+    $count = [int](Get-Content -LiteralPath $attemptFile -Raw)
+}
+$count += 1
+Set-Content -LiteralPath $attemptFile -Value $count -NoNewline
+$venvPython = Join-Path (Get-Location) '.venv\\Scripts\\python.exe'
+if ($count -eq 1) {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $venvPython) -Force | Out-Null
+    exit 1
+}
+New-Item -ItemType Directory -Path (Split-Path -Parent $venvPython) -Force | Out-Null
+New-Item -ItemType File -Path $venvPython -Force | Out-Null
+exit 0
+""",
+        },
+    )
+    target = tmp_path / "install-target"
+    target.mkdir()
+
+    env = base_env()
+    env["CALIXTO_REPO_URL"] = str(remote)
+    result = invoke_windows_installer(
+        checkout,
+        target,
+        env,
+        args=["-NonInteractive"],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (target / "setup-attempts.txt").read_text(encoding="utf-8") == "2"
+    assert (target / ".venv" / "Scripts" / "python.exe").exists()
+    assert "Retrying once." in result.stdout
+    assert_no_installer_artifacts(target)
+
+
+def test_fresh_install_accepts_successful_setup_output(
+    tmp_path: Path,
+) -> None:
+    require_windows_prereqs()
+    checkout = create_isolated_checkout(tmp_path)
+    remote = make_remote_git_repo(
+        checkout,
+        tmp_path / "remote.git",
+        add_text_files={
+            "setup.ps1": """
+#!/usr/bin/env pwsh
+Write-Host 'setup output line'
+exit 0
+""",
+        },
+    )
+    target = tmp_path / "install-target"
+    target.mkdir()
+
+    env = base_env()
+    env["CALIXTO_REPO_URL"] = str(remote)
+    result = invoke_windows_installer(
+        checkout,
+        target,
+        env,
+        args=["-NonInteractive"],
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "setup output line" in result.stdout
+    assert_no_installer_artifacts(target)
+
+
 def test_update_preserves_user_data_and_retires_removed_managed_entry(
     tmp_path: Path,
 ) -> None:

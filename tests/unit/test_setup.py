@@ -388,7 +388,7 @@ class TestSetupPs1NativeExitCodes:
                 )
 
     def test_setup_ps1_checks_last_exit_code_for_crawl4ai(self) -> None:
-        """After `crawl4ai-setup`, the script must check $LASTEXITCODE."""
+        """After `crawl4ai-setup`, the script must check the native result explicitly."""
         if not _have_pwsh():
             pytest.skip("pwsh not available")
         text = SETUP_PS1.read_text(encoding="utf-8")
@@ -398,9 +398,9 @@ class TestSetupPs1NativeExitCodes:
             if "crawl4ai-setup" in stripped:
                 window = lines[i : i + 12]
                 window_text = "\n".join(window)
-                assert "LASTEXITCODE" in window_text, (
+                assert "LASTEXITCODE" in window_text or ".ExitCode" in window_text, (
                     f"`crawl4ai-setup` at line {i+1} is not followed "
-                    f"by a $LASTEXITCODE check."
+                    f"by an explicit exit-code check."
                 )
 
     def test_setup_ps1_lists_ddgs_in_install_message(self) -> None:
@@ -447,6 +447,67 @@ class TestSetupPs1NativeExitCodes:
         text = RUNTIME_SETUP_PS1.read_text(encoding="utf-8")
         assert _imports_module(text, "ddgs"), (
             "runtime/workspace/setup.ps1 verification step must import `ddgs`."
+        )
+
+    @pytest.mark.parametrize("source_script", [SETUP_PS1, RUNTIME_SETUP_PS1])
+    def test_setup_ps1_accepts_uv_stderr_on_success(
+        self, tmp_path: Path, source_script: Path
+    ) -> None:
+        if not _have_pwsh():
+            pytest.skip("pwsh not available")
+        project_dir = tmp_path / "workspace"
+        project_dir.mkdir()
+        script_path = project_dir / "setup.ps1"
+        script_path.write_text(source_script.read_text(encoding="utf-8"), encoding="utf-8")
+
+        fake_bin = tmp_path / "bin"
+        fake_bin.mkdir()
+        (fake_bin / "python.cmd").write_text(
+            "@echo off\r\n"
+            "if \"%~1\"==\"--version\" (\r\n"
+            "  echo Python 3.11.4\r\n"
+            "  exit /b 0\r\n"
+            ")\r\n"
+            "echo unexpected python args: %* 1>&2\r\n"
+            "exit /b 1\r\n",
+            encoding="utf-8",
+        )
+        (fake_bin / "uv.cmd").write_text(
+            "@echo off\r\n"
+            "if \"%~1\"==\"--version\" (\r\n"
+            "  echo uv 0.0-test\r\n"
+            "  exit /b 0\r\n"
+            ")\r\n"
+            "if \"%~1\"==\"sync\" (\r\n"
+            "  echo informational sync message 1>&2\r\n"
+            "  mkdir \".venv\\Scripts\" >nul 2>&1\r\n"
+            "  type nul > \".venv\\Scripts\\python.exe\"\r\n"
+            "  exit /b 0\r\n"
+            ")\r\n"
+            "if \"%~1\"==\"run\" (\r\n"
+            "  if \"%~2\"==\"crawl4ai-setup\" exit /b 0\r\n"
+            "  if \"%~2\"==\"python\" (\r\n"
+            "    echo ok\r\n"
+            "    exit /b 0\r\n"
+            "  )\r\n"
+            ")\r\n"
+            "echo unexpected uv args: %* 1>&2\r\n"
+            "exit /b 1\r\n",
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            ["pwsh", "-NoProfile", "-File", str(script_path)],
+            cwd=project_dir,
+            env={**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"},
+            capture_output=True,
+            text=True,
+        )
+
+        assert result.returncode == 0, (
+            f"{source_script.name} treated uv stderr as a fatal error:\n"
+            f"stdout={result.stdout}\n"
+            f"stderr={result.stderr}"
         )
 
     @pytest.mark.parametrize("source_script", [SETUP_PS1, RUNTIME_SETUP_PS1])

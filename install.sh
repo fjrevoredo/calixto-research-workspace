@@ -309,6 +309,18 @@ make_temp_staging_dir() {
     mktemp -d "${TMPDIR:-/tmp}/calixto-install.XXXXXX"
 }
 
+is_incomplete_venv() {
+    local root="$1"
+    local venv_dir="$root/.venv"
+    local venv_python="$venv_dir/bin/python"
+    [ -d "$venv_dir" ] && [ ! -x "$venv_python" ]
+}
+
+invoke_setup_script() {
+    local setup_script="$1"
+    (cd "$TARGET_DIR" && bash "$setup_script")
+}
+
 run_setup_if_requested() {
     local setup_script="$1"
     local context="$2"
@@ -320,9 +332,16 @@ run_setup_if_requested() {
         return 0
     fi
     log "Running setup.sh"
-    if ! (cd "$TARGET_DIR" && bash "$setup_script"); then
-        fail "setup.sh failed during $context. Toolkit files are present, but the environment is not ready."
+    if invoke_setup_script "$setup_script"; then
+        return 0
     fi
+    if is_incomplete_venv "$TARGET_DIR"; then
+        warn "setup.sh left an incomplete virtual environment after a failed attempt. Retrying once."
+        if invoke_setup_script "$setup_script"; then
+            return 0
+        fi
+    fi
+    fail "setup.sh failed during $context. Toolkit files are present, but the environment is not ready."
 }
 
 fresh_install() {
