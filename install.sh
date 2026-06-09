@@ -11,7 +11,7 @@ shopt -s dotglob nullglob
 
 TARGET_DIR="$(pwd)"
 REPO_URL="${CALIXTO_REPO_URL:-https://github.com/fjrevoredo/calixto-research-workspace.git}"
-REPO_BRANCH="${CALIXTO_REPO_BRANCH:-master}"
+REPO_BRANCH="${CALIXTO_REPO_BRANCH:-}"
 REPO_BRANCH_EXPLICIT=0
 if [ -n "${CALIXTO_REPO_BRANCH:-}" ]; then
     REPO_BRANCH_EXPLICIT=1
@@ -49,7 +49,7 @@ Options:
   --skip-deps          Skip running setup.sh / setup.ps1 afterwards
   --version TAG        Install a specific release tag
   --repo URL           Use a different GitHub repository URL
-  --branch BRANCH      Install a specific branch (default: master)
+  --branch BRANCH      Install a specific branch (default: repository default branch)
   --help               Show this help and exit
 EOF
 }
@@ -116,7 +116,7 @@ is_workspace() {
 selected_ref() {
     if [ -n "$VERSION" ]; then
         printf '%s\n' "$VERSION"
-    else
+    elif [ "$REPO_BRANCH_EXPLICIT" -eq 1 ]; then
         printf '%s\n' "$REPO_BRANCH"
     fi
 }
@@ -162,19 +162,28 @@ build_source_url() {
         return 0
     fi
     if command_exists git; then
+        local url="$REPO_URL"
         if [ "$TEST_MODE" = "1" ]; then
-            printf 'git:%s:%s\n' "$REPO_URL" "$ref"
+            :
         else
-            printf 'git:%s:%s\n' "$(normalize_repo_url "$REPO_URL")" "$ref"
+            url="$(normalize_repo_url "$REPO_URL")"
+        fi
+        if [ -n "$ref" ]; then
+            printf 'git-ref:%s:%s\n' "$url" "$ref"
+        else
+            printf 'git-default:%s\n' "$url"
         fi
         return 0
     fi
     if [ -n "$VERSION" ]; then
         printf 'tarball:%s/archive/refs/tags/%s.tar.gz\n' \
             "$(build_archive_base_url)" "$VERSION"
-    else
+    elif [ "$REPO_BRANCH_EXPLICIT" -eq 1 ]; then
         printf 'tarball:%s/archive/refs/heads/%s.tar.gz\n' \
             "$(build_archive_base_url)" "$REPO_BRANCH"
+    else
+        printf 'tarball:%s/archive/HEAD.tar.gz\n' \
+            "$(build_archive_base_url)"
     fi
 }
 
@@ -344,11 +353,16 @@ fresh_install() {
 
     local source_root=""
     case "$src" in
-        git:*)
-            local url="${src#git:}"
+        git-ref:*)
+            local url="${src#git-ref:}"
             url="${url%:*}"
             local ref="${src##*:}"
             git clone --depth 1 --branch "$ref" "$url" "$staging/repo"
+            source_root="$staging/repo"
+            ;;
+        git-default:*)
+            local url="${src#git-default:}"
+            git clone --depth 1 "$url" "$staging/repo"
             source_root="$staging/repo"
             ;;
         tarball:*)
@@ -415,11 +429,16 @@ update_workspace() {
 
     local source_root=""
     case "$src" in
-        git:*)
-            local url="${src#git:}"
+        git-ref:*)
+            local url="${src#git-ref:}"
             url="${url%:*}"
             local ref="${src##*:}"
             git clone --depth 1 --branch "$ref" "$url" "$staging/repo"
+            source_root="$staging/repo"
+            ;;
+        git-default:*)
+            local url="${src#git-default:}"
+            git clone --depth 1 "$url" "$staging/repo"
             source_root="$staging/repo"
             ;;
         tarball:*)

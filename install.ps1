@@ -19,7 +19,7 @@ param(
     [string]$Branch = $(if ($env:CALIXTO_REPO_BRANCH) {
         $env:CALIXTO_REPO_BRANCH
     } else {
-        'master'
+        ''
     })
 )
 
@@ -89,7 +89,10 @@ function Get-SelectedRef {
     if ($Version) {
         return $Version
     }
-    return $Branch
+    if ($BranchExplicit) {
+        return $Branch
+    }
+    return ''
 }
 
 function Validate-SelectorContract {
@@ -123,19 +126,26 @@ function Get-ArchiveBaseUrl {
 function Get-RepoSource {
     $ref = Get-SelectedRef
     if ($TestArchiveUrl) {
-        return @{ Mode = 'tarball'; Url = $TestArchiveUrl }
+        return @{ Mode = 'tarball'; Url = $TestArchiveUrl; Display = "tarball:$TestArchiveUrl" }
     }
     if (Get-Command git -ErrorAction SilentlyContinue) {
-        if ($TestMode) {
-            return @{ Mode = 'git'; Url = $RepoUrl; Ref = $ref }
+        $url = if ($TestMode) { $RepoUrl } else { Normalize-RepoUrl $RepoUrl }
+        if ($ref) {
+            return @{ Mode = 'git'; Url = $url; Ref = $ref; Display = "git:${url}:${ref}" }
         }
-        return @{ Mode = 'git'; Url = (Normalize-RepoUrl $RepoUrl); Ref = $ref }
+        return @{ Mode = 'git'; Url = $url; Ref = $null; Display = "git:${url}:<default>" }
     }
     $base = Get-ArchiveBaseUrl
     if ($Version) {
-        return @{ Mode = 'tarball'; Url = "$base/archive/refs/tags/$Version.tar.gz" }
+        $url = "$base/archive/refs/tags/$Version.tar.gz"
+        return @{ Mode = 'tarball'; Url = $url; Display = "tarball:$url" }
     }
-    return @{ Mode = 'tarball'; Url = "$base/archive/refs/heads/$Branch.tar.gz" }
+    if ($BranchExplicit) {
+        $url = "$base/archive/refs/heads/$Branch.tar.gz"
+        return @{ Mode = 'tarball'; Url = $url; Display = "tarball:$url" }
+    }
+    $url = "$base/archive/HEAD.tar.gz"
+    return @{ Mode = 'tarball'; Url = $url; Display = "tarball:$url" }
 }
 
 function Download-File {
@@ -325,7 +335,7 @@ function Invoke-FreshInstall {
     }
 
     $src = Get-RepoSource
-    Write-Info "Source: $($src.Mode):$($src.Url)"
+    Write-Info "Source: $($src.Display)"
 
     if ($DryRun) {
         Write-Host "   [dry-run] would fetch source into a staging directory and apply a fresh install"
@@ -337,7 +347,11 @@ function Invoke-FreshInstall {
     $sourceRoot = $null
     switch ($src.Mode) {
         'git' {
-            & git clone --depth 1 --branch $src.Ref $src.Url (Join-Path $staging 'repo')
+            if ($src.Ref) {
+                & git clone --depth 1 --branch $src.Ref $src.Url (Join-Path $staging 'repo')
+            } else {
+                & git clone --depth 1 $src.Url (Join-Path $staging 'repo')
+            }
             if ($LASTEXITCODE -ne 0) {
                 Cleanup-Path $staging
                 Write-Fail "git clone failed during fresh install."
@@ -392,7 +406,7 @@ function Invoke-UpdateWorkspace {
     }
 
     $src = Get-RepoSource
-    Write-Info "Source: $($src.Mode):$($src.Url)"
+    Write-Info "Source: $($src.Display)"
 
     if ($DryRun) {
         Write-Host "   [dry-run] would fetch source, validate it, and apply an update transaction to toolkit files only"
@@ -404,7 +418,11 @@ function Invoke-UpdateWorkspace {
     $sourceRoot = $null
     switch ($src.Mode) {
         'git' {
-            & git clone --depth 1 --branch $src.Ref $src.Url (Join-Path $staging 'repo')
+            if ($src.Ref) {
+                & git clone --depth 1 --branch $src.Ref $src.Url (Join-Path $staging 'repo')
+            } else {
+                & git clone --depth 1 $src.Url (Join-Path $staging 'repo')
+            }
             if ($LASTEXITCODE -ne 0) {
                 Cleanup-Path $staging
                 Write-Fail "git clone failed during update."
