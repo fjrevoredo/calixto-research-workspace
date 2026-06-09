@@ -18,16 +18,19 @@ sys.path.insert(0, str(SCRIPTS_DIR.parent))  # repo root
 sys.path.insert(0, str(SCRIPTS_DIR))  # so 'import _common' works
 
 from _common import (  # noqa: E402
+    WorkspaceStateCoordinator,
     is_valid_slug,
     load_source_index,
     load_workspace_config,
     normalize_url,
     parse_frontmatter,
+    recover_workspace_transactions,
     render_frontmatter,
     save_source_index,
     save_workspace_config,
     slugify,
     source_id_for,
+    validate_workspace_search_state,
     truncate_markdown,
     utcnow_iso,
     word_count,
@@ -267,3 +270,163 @@ class TestUtcnow:
         assert len(ts) == 20
         assert ts.endswith("Z")
         assert "T" in ts
+
+
+class TestWorkspaceStateCoordinator:
+    def _make_workspace(self, tmp_path: Path) -> Path:
+        workspace = tmp_path / "ws"
+        (workspace / "sources" / "web").mkdir(parents=True)
+        (workspace / "sources" / "papers").mkdir(parents=True)
+        save_workspace_config(
+            workspace,
+            {
+                "name": "ws",
+                "question": "",
+                "next_source_id": 1,
+                "next_finding_id": 1,
+                "next_insight_id": 1,
+                "searches": [],
+            },
+        )
+        save_source_index(workspace, {"next_id": 1, "sources": []})
+        return workspace
+
+    def test_validate_workspace_search_state_rejects_mismatched_next_id(self) -> None:
+        with pytest.raises(ValueError, match="config.next_source_id"):
+            validate_workspace_search_state(
+                {
+                    "next_source_id": 9,
+                    "searches": [],
+                },
+                {
+                    "next_id": 2,
+                    "sources": [
+                        {"id": "src_001", "url": "https://example.com", "file": "web/src_001.md"},
+                    ],
+                },
+            )
+
+    def test_coordinator_commit_writes_source_index_and_config(self, tmp_path: Path) -> None:
+        workspace = self._make_workspace(tmp_path)
+        with WorkspaceStateCoordinator(workspace) as coordinator:
+            config = coordinator.config
+            index = coordinator.index
+            index["sources"].append(
+                {
+                    "id": "src_001",
+                    "url": "https://example.com/a",
+                    "file": "web/src_001.md",
+                    "url_normalized": "example.com/a",
+                    "added_at": utcnow_iso(),
+                    "query": "q",
+                    "word_count": 3,
+                }
+            )
+            index["next_id"] = 2
+            config["next_source_id"] = 2
+            config["searches"].append(
+                {
+                    "query": "q",
+                    "provider": "duckduckgo",
+                    "timestamp": utcnow_iso(),
+                    "source_ids": ["src_001"],
+                }
+            )
+            coordinator.commit(
+                config=config,
+                index=index,
+                source_files=[
+                    {
+                        "relpath": "sources/web/src_001.md",
+                        "content": "---\nid: src_001\n---\n\nbody\n",
+                    }
+                ],
+                transaction_label="test_commit",
+            )
+
+        assert (workspace / "sources" / "web" / "src_001.md").exists()
+        loaded_index = load_source_index(workspace)
+        assert loaded_index["next_id"] == 2
+        assert loaded_index["sources"][0]["id"] == "src_001"
+        loaded_config = load_workspace_config(workspace)
+        assert loaded_config["next_source_id"] == 2
+        assert len(loaded_config["searches"]) == 1
+        assert not (workspace / ".calixto" / "transactions").exists() or not any(
+            (workspace / ".calixto" / "transactions").iterdir()
+        )
+
+    def test_recover_workspace_transactions_rolls_forward_staged_files(self, tmp_path: Path) -> None:
+        workspace = self._make_workspace(tmp_path)
+        txdir = workspace / ".calixto" / "transactions" / "tx-test"
+        staged = txdir / "staged"
+        staged.joinpath("sources", "web").mkdir(parents=True, exist_ok=True)
+        staged.joinpath("sources").mkdir(parents=True, exist_ok=True)
+        staged.joinpath("config.json").write_text(
+            json.dumps(
+                {
+                    "name": "ws",
+                    "question": "",
+                    "next_source_id": 2,
+                    "next_finding_id": 1,
+                    "next_insight_id": 1,
+                    "searches": [
+                        {
+                            "query": "q",
+                            "provider": "duckduckgo",
+                            "timestamp": utcnow_iso(),
+                            "source_ids": ["src_001"],
+                        }
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        staged.joinpath("sources", "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 2,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/a",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/a",
+                            "added_at": utcnow_iso(),
+                            "query": "q",
+                            "word_count": 3,
+                        }
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        staged.joinpath("sources", "web", "src_001.md").write_text(
+            "---\nid: src_001\n---\n\nbody\n",
+            encoding="utf-8",
+        )
+        txdir.mkdir(parents=True, exist_ok=True)
+        (txdir / "manifest.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "transaction_id": "tx-test",
+                    "transaction_label": "test_recovery",
+                    "created_at": utcnow_iso(),
+                    "files": [
+                        "config.json",
+                        "sources/index.json",
+                        "sources/web/src_001.md",
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        summary = recover_workspace_transactions(workspace)
+        assert summary["recovered"] == ["tx-test"]
+        assert (workspace / "sources" / "web" / "src_001.md").exists()
+        assert load_source_index(workspace)["next_id"] == 2
+        assert load_workspace_config(workspace)["next_source_id"] == 2

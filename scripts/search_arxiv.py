@@ -21,7 +21,9 @@ Architecture:
     - arXiv is queried via the `arxiv` Python package (rate limit 1 req / 3s)
     - 3.5s delay between queries per requirements.md section 15
     - Dedup by arXiv ID (stable, unique, not URL)
-    - Saves to sources/papers/<src_NNN>.md
+    - Prepares paper markdown outside the mutation lock when possible
+    - Commits paper files, sources/index.json, and config.json through the
+      same staged workspace coordinator used by web search
     - Shares the same index.json and config.json with web searches, so IDs are
       sequential across the workspace
 
@@ -35,6 +37,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
 from datetime import datetime
@@ -49,14 +52,13 @@ for p in (str(_REPO_ROOT), str(_SCRIPTS_DIR)):
         sys.path.insert(0, p)
 
 from _common import (
+    WorkspaceStateCoordinator,
     emit_error,
     emit_ok,
     emit_partial,
     load_source_index,
     load_workspace_config,
     render_frontmatter,
-    save_source_index,
-    save_workspace_config,
     source_id_for,
     utcnow_iso,
     word_count,
@@ -80,6 +82,19 @@ ARXIV_DELAY_SECONDS = 3.5
 def default_cache_dir(workspace: Path) -> Path:
     """Return the default cache directory for a standalone workspace."""
     return workspace / ".calixto" / "cache"
+
+
+def maybe_test_precommit_delay() -> None:
+    """Deterministic test hook for concurrent-search regression coverage."""
+    delay_ms = os.environ.get("CALIXTO_TEST_PRE_COMMIT_DELAY_MS", "").strip()
+    if not delay_ms:
+        return
+    try:
+        delay_value = int(delay_ms)
+    except ValueError:
+        return
+    if delay_value > 0:
+        time.sleep(delay_value / 1000.0)
 
 
 def _ensure_arxiv_client() -> Any:
@@ -149,8 +164,8 @@ def run_arxiv_search(
             f"workspace not found at {workspace}. Run init_workspace.py first.",
         )
 
-    config = load_workspace_config(workspace)
-    index = load_source_index(workspace)
+    initial_config = load_workspace_config(workspace)
+    initial_index = load_source_index(workspace)
 
     if clear_cache_first and cache_dir.exists():
         removed = clear_cache(cache_dir)
@@ -231,136 +246,135 @@ def run_arxiv_search(
             category=category, sort_by=sort_by,
         )
 
-    # Dedup by arxiv_id
-    existing_arxiv_ids = {
-        s.get("arxiv_id")
-        for s in index.get("sources", [])
-        if s.get("arxiv_id")
+    initial_arxiv_ids = {
+        str(source.get("arxiv_id", "")).strip()
+        for source in initial_index.get("sources", [])
+        if str(source.get("arxiv_id", "")).strip()
     }
-    new_results: list[dict] = []
-    skipped = 0
-    for r in raw_results:
-        arxiv_id = r.get("arxiv_id", "")
-        if not arxiv_id or arxiv_id in existing_arxiv_ids:
-            skipped += 1
+    candidate_results: list[dict[str, Any]] = []
+    skipped_preexisting = 0
+    seen_candidate_ids: set[str] = set()
+    for result in raw_results:
+        arxiv_id = str(result.get("arxiv_id", "")).strip()
+        if not arxiv_id or arxiv_id in seen_candidate_ids:
+            skipped_preexisting += 1
             continue
-        existing_arxiv_ids.add(arxiv_id)
-        new_results.append(r)
+        seen_candidate_ids.add(arxiv_id)
+        if arxiv_id in initial_arxiv_ids:
+            skipped_preexisting += 1
+            continue
+        candidate_results.append(result)
 
-    if not new_results:
-        # Record the search and exit cleanly
+    added_ids: list[str] = []
+    skipped_committed = 0
+
+    maybe_test_precommit_delay()
+
+    with WorkspaceStateCoordinator(workspace) as coordinator:
+        config = coordinator.config
+        index = coordinator.index
+        current_arxiv_ids = {
+            str(source.get("arxiv_id", "")).strip()
+            for source in index.get("sources", [])
+            if str(source.get("arxiv_id", "")).strip()
+        }
+        next_id = index.get("next_id", 1)
+        source_files: list[dict[str, str]] = []
+
+        for result in candidate_results:
+            arxiv_id = str(result.get("arxiv_id", "")).strip()
+            if not arxiv_id or arxiv_id in current_arxiv_ids:
+                skipped_committed += 1
+                continue
+
+            source_id = source_id_for(next_id)
+            next_id += 1
+            body_lines: list[str] = []
+            body_lines.append(f"# {result['title'] or 'Untitled'}")
+            body_lines.append("")
+            body_lines.append(f"**Authors:** {result['authors']}")
+            body_lines.append("")
+            body_lines.append(f"**Date published:** {result['date_published']}")
+            body_lines.append("")
+            body_lines.append(f"**arXiv ID:** {arxiv_id}")
+            body_lines.append("")
+            body_lines.append(f"**URL:** {result['url']}")
+            if result.get("pdf_url"):
+                body_lines.append(f"**PDF:** {result['pdf_url']}")
+            body_lines.append("")
+            if result.get("categories"):
+                body_lines.append(f"**Categories:** {', '.join(result['categories'])}")
+                body_lines.append("")
+            body_lines.append("## Abstract")
+            body_lines.append("")
+            body_lines.append(result.get("summary", "(no summary)"))
+            body = "\n".join(body_lines)
+            wc = word_count(body)
+            frontmatter: dict[str, Any] = {
+                "id": source_id,
+                "url": result["url"],
+                "title": result["title"],
+                "date_crawled": utcnow_iso(),
+                "date_published": result["date_published"],
+                "provider": "arxiv",
+                "search_provider": "arxiv",
+                "query": query,
+                "arxiv_id": arxiv_id,
+                "authors": result["authors"],
+                "categories": result.get("categories", []),
+                "word_count": wc,
+                "truncated": False,
+            }
+            relpath = f"papers/{source_id}.md"
+            source_files.append(
+                {
+                    "relpath": f"sources/{relpath}",
+                    "content": render_frontmatter(frontmatter, body),
+                }
+            )
+            index.setdefault("sources", []).append(
+                {
+                    "id": source_id,
+                    "url": result["url"],
+                    "file": relpath,
+                    "added_at": utcnow_iso(),
+                    "query": query,
+                    "word_count": wc,
+                    "title": result["title"],
+                    "arxiv_id": arxiv_id,
+                    "authors": result["authors"],
+                    "date_published": result["date_published"],
+                    "categories": result.get("categories", []),
+                    "search_provider": "arxiv",
+                }
+            )
+            current_arxiv_ids.add(arxiv_id)
+            added_ids.append(source_id)
+
+        index["next_id"] = next_id
         config.setdefault("searches", []).append(
             {
                 "query": query,
                 "provider": "arxiv",
+                "category": category,
                 "timestamp": utcnow_iso(),
                 "results_count": len(raw_results),
-                "sources_added": 0,
-                "sources_skipped": skipped,
+                "sources_added": len(added_ids),
+                "sources_skipped": skipped_preexisting + skipped_committed,
+                "source_ids": added_ids,
             }
         )
-        config["next_source_id"] = index.get("next_id", 1)
-        save_workspace_config(workspace, config)
-        save_source_index(workspace, index)
-        return {
-            "sources_added": 0,
-            "sources_skipped": skipped,
-            "source_ids": [],
-            "workspace": str(workspace),
-            "query": query,
-        }
-
-    next_id = index.get("next_id", 1)
-    added_ids: list[str] = []
-
-    for r in new_results:
-        arxiv_id = r["arxiv_id"]
-        source_id = source_id_for(next_id)
-        next_id += 1
-
-        # Build the markdown body
-        body_lines: list[str] = []
-        body_lines.append(f"# {r['title'] or 'Untitled'}")
-        body_lines.append("")
-        body_lines.append(f"**Authors:** {r['authors']}")
-        body_lines.append("")
-        body_lines.append(f"**Date published:** {r['date_published']}")
-        body_lines.append("")
-        body_lines.append(f"**arXiv ID:** {arxiv_id}")
-        body_lines.append("")
-        body_lines.append(f"**URL:** {r['url']}")
-        if r.get("pdf_url"):
-            body_lines.append(f"**PDF:** {r['pdf_url']}")
-        body_lines.append("")
-        if r.get("categories"):
-            body_lines.append(f"**Categories:** {', '.join(r['categories'])}")
-            body_lines.append("")
-        body_lines.append("## Abstract")
-        body_lines.append("")
-        body_lines.append(r.get("summary", "(no summary)"))
-        body = "\n".join(body_lines)
-        wc = word_count(body)
-
-        frontmatter: dict[str, Any] = {
-            "id": source_id,
-            "url": r["url"],
-            "title": r["title"],
-            "date_crawled": utcnow_iso(),
-            "date_published": r["date_published"],
-            "provider": "arxiv",
-            "search_provider": "arxiv",
-            "query": query,
-            "arxiv_id": arxiv_id,
-            "authors": r["authors"],
-            "categories": r.get("categories", []),
-            "word_count": wc,
-            "truncated": False,
-        }
-
-        relpath = f"papers/{source_id}.md"
-        target = workspace / "sources" / "papers" / f"{source_id}.md"
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(render_frontmatter(frontmatter, body), encoding="utf-8")
-
-        index.setdefault("sources", []).append(
-            {
-                "id": source_id,
-                "url": r["url"],
-                "file": relpath,
-                "added_at": utcnow_iso(),
-                "query": query,
-                "word_count": wc,
-                "title": r["title"],
-                "arxiv_id": arxiv_id,
-                "authors": r["authors"],
-                "date_published": r["date_published"],
-                "categories": r.get("categories", []),
-                "search_provider": "arxiv",
-            }
+        config["next_source_id"] = next_id
+        coordinator.commit(
+            config=config,
+            index=index,
+            source_files=source_files,
+            transaction_label="search_arxiv",
         )
-        added_ids.append(source_id)
-
-    index["next_id"] = next_id
-
-    config.setdefault("searches", []).append(
-        {
-            "query": query,
-            "provider": "arxiv",
-            "category": category,
-            "timestamp": utcnow_iso(),
-            "results_count": len(raw_results),
-            "sources_added": len(added_ids),
-            "sources_skipped": skipped,
-            "source_ids": added_ids,
-        }
-    )
-    config["next_source_id"] = next_id
-    save_workspace_config(workspace, config)
-    save_source_index(workspace, index)
 
     return {
         "sources_added": len(added_ids),
-        "sources_skipped": skipped,
+        "sources_skipped": skipped_preexisting + skipped_committed,
         "source_ids": added_ids,
         "workspace": str(workspace),
         "query": query,

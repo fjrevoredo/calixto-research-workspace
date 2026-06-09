@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 from .base import ScrapeError, ScrapeProvider, ScrapeResult
@@ -40,6 +41,19 @@ log = logging.getLogger(__name__)
 
 # Default timeout for a single scrape (seconds)
 DEFAULT_TIMEOUT_SECONDS = 30.0
+_MAX_CONSECUTIVE_BLANKS = 1
+_BOILERPLATE_LINE_RE = re.compile(
+    r"^(skip to content|sign in|log in|navigation menu|cookie preferences|accept all|all cookies|terms|privacy|watch on youtube|open in colab|search code, repositories, users, issues, pull requests|instant dev environments|saved searches)$",
+    re.IGNORECASE,
+)
+_LOW_SIGNAL_TEXT_PATTERNS = (
+    "watch on youtube",
+    "sign in to continue",
+    "open in colab",
+    "enable javascript",
+    "cookie preferences",
+    "navigation menu",
+)
 
 
 class Crawl4AIProvider(ScrapeProvider):
@@ -182,6 +196,7 @@ class Crawl4AIProvider(ScrapeProvider):
                 if meta_obj.get(k):
                     metadata[k] = meta_obj[k]
 
+        markdown, metadata = _postprocess_markdown(url, markdown, metadata)
         word_count = len(markdown.split()) if markdown else 0
         return ScrapeResult(
             url=url,
@@ -294,6 +309,7 @@ def _crawl_result_to_scrape_result(url: str, crawl_result: Any) -> ScrapeResult:
         for k in ("description", "author", "keywords", "og:description"):
             if meta_obj.get(k):
                 metadata[k] = meta_obj[k]
+    markdown, metadata = _postprocess_markdown(url, markdown, metadata)
     return ScrapeResult(
         url=url,
         title=title,
@@ -301,3 +317,78 @@ def _crawl_result_to_scrape_result(url: str, crawl_result: Any) -> ScrapeResult:
         word_count=len(markdown.split()) if markdown else 0,
         metadata=metadata,
     )
+
+
+def _postprocess_markdown(url: str, markdown: str, metadata: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """Reduce boilerplate and classify thin/UI-heavy pages."""
+    updated_metadata = dict(metadata)
+    updated_metadata["extraction_strategy"] = "crawl4ai_plus_cleanup"
+    if not markdown:
+        _apply_low_signal_metadata(url, "", updated_metadata)
+        return markdown, updated_metadata
+
+    cleaned_lines: list[str] = []
+    removed_boilerplate_lines = 0
+    blank_run = 0
+    for raw_line in markdown.splitlines():
+        line = raw_line.rstrip()
+        normalized = " ".join(line.split())
+        if normalized and _looks_like_boilerplate_line(normalized):
+            removed_boilerplate_lines += 1
+            continue
+        if not normalized:
+            blank_run += 1
+            if blank_run > _MAX_CONSECUTIVE_BLANKS:
+                continue
+        else:
+            blank_run = 0
+        cleaned_lines.append(line)
+
+    cleaned = "\n".join(cleaned_lines).strip()
+    if cleaned:
+        markdown = cleaned
+    if removed_boilerplate_lines:
+        updated_metadata["boilerplate_lines_removed"] = removed_boilerplate_lines
+    _apply_low_signal_metadata(url, markdown, updated_metadata)
+    return markdown, updated_metadata
+
+
+def _looks_like_boilerplate_line(line: str) -> bool:
+    """Return True when a single markdown line is almost certainly UI chrome."""
+    if len(line) <= 80 and _BOILERPLATE_LINE_RE.match(line):
+        return True
+    if len(line) <= 40 and line.lower().startswith(("cookies", "privacy", "terms")):
+        return True
+    return False
+
+
+def _apply_low_signal_metadata(url: str, markdown: str, metadata: dict[str, Any]) -> None:
+    """Annotate obviously thin or UI-heavy pages without discarding content."""
+    word_count = len(markdown.split()) if markdown else 0
+    lower_text = markdown.lower()
+    reasons: list[str] = []
+    if word_count < 80:
+        reasons.append("very_short")
+    if markdown and not any(line.lstrip().startswith("#") for line in markdown.splitlines()):
+        reasons.append("no_headings")
+    if any(pattern in lower_text for pattern in _LOW_SIGNAL_TEXT_PATTERNS):
+        reasons.append("ui_heavy_content")
+    if "youtube.com" in url.lower():
+        reasons.append("youtube_page")
+    if "colab.research.google.com" in url.lower():
+        reasons.append("colab_page")
+    if metadata.get("error"):
+        reasons.append(f"provider_error:{metadata['error']}")
+
+    low_signal = False
+    if "ui_heavy_content" in reasons or "youtube_page" in reasons or "colab_page" in reasons:
+        low_signal = word_count < 250
+    elif "very_short" in reasons and "no_headings" in reasons:
+        low_signal = True
+    elif str(metadata.get("error", "")).strip():
+        low_signal = True
+
+    metadata["content_quality"] = "low_signal" if low_signal else "normal"
+    metadata["low_signal"] = low_signal
+    if reasons:
+        metadata["low_signal_reasons"] = sorted(set(reasons))

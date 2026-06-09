@@ -59,6 +59,12 @@ uv run python scripts/workspace_info.py show .
 
 Mix web and paper searches. Run 3-5 queries with different angles.
 
+Important: do not queue multiple `search_web.py` / `search_arxiv.py` commands in
+one agent message. Many agents execute tool calls in parallel, which can make
+the session harder to inspect even though the workspace now serializes writes.
+Run searches sequentially, inspect the workspace after each search or batch,
+then continue.
+
 ```bash
 uv run python scripts/search_web.py "<query>" --workspace . --max-results 10
 uv run python scripts/search_arxiv.py "<query>" --workspace . --max-results 5
@@ -71,6 +77,15 @@ Good queries:
 - a counter-perspective
 - authoritative sources
 - recent developments
+
+After each search or search batch, verify that the workspace recorded it:
+
+```bash
+uv run python scripts/workspace_info.py show .
+uv run python scripts/workspace_info.py audit .
+```
+
+Confirm the search count increased as expected before moving on.
 
 ### Step 3: Read and evaluate sources
 
@@ -92,6 +107,11 @@ Append facts to `notes/findings.md`:
 ```
 
 Every finding must cite at least one `src_NNN`.
+Use only bare `src_NNN` identifiers. Do not cite file paths such as
+`papers/src_001`.
+
+After you append findings, update `config.json` so `next_finding_id` remains
+one higher than the highest finding ID present in `notes/findings.md`.
 
 ### Step 5: Synthesize insights
 
@@ -105,9 +125,14 @@ Append to `notes/summary.md`:
 
 Every insight must cite at least one `fnd_NNN`.
 
+After you append insights, update `config.json` so `next_insight_id` remains
+one higher than the highest insight ID present in `notes/summary.md`.
+
 ### Step 6: Write the report
 
 Write `outputs/report.md` and cite sources inline as `[src_NNN]`.
+Never use `[papers/src_001]`, `[web/src_001]`, or any other path-qualified
+source reference.
 
 Keep claims proportional to the evidence quality. If evidence conflicts, say so
 explicitly instead of smoothing it over.

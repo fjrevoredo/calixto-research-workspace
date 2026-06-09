@@ -8,6 +8,7 @@ in tests/golden/run.py.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -35,7 +36,12 @@ def run_script(*args: str, cwd: Path | None = None) -> subprocess.CompletedProce
 
 
 def build_cache_file(
-    cache_dir: Path, provider: str, query: str, max_results: int, **params: str
+    cache_dir: Path,
+    provider: str,
+    query: str,
+    max_results: int,
+    results: list[dict] | None = None,
+    **params: str,
 ) -> Path:
     """Write a cache file using the same key format search_web.py uses."""
     import hashlib
@@ -57,7 +63,8 @@ def build_cache_file(
                 "query": query,
                 "max_results": max_results,
                 "params": {k: v for k, v in params.items() if v not in (None, "")},
-                "results": [
+                "results": results
+                or [
                     {
                         "url": "https://example.com/cached",
                         "title": "Cached Title",
@@ -388,6 +395,362 @@ class TestWorkspaceInfo:
         )
         assert result.returncode == 0
         assert not ws.exists()
+
+
+class TestWorkspaceReliabilityRegressions:
+    def _make_workspace(self, tmp_path: Path, name: str = "reliability") -> Path:
+        run_script(str(SCRIPTS_DIR / "init_workspace.py"), name, "--path", str(tmp_path))
+        return tmp_path / name
+
+    def test_audit_flags_path_qualified_paper_citation(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "audit-paths")
+        (ws / "sources" / "web" / "src_001.md").write_text(
+            "---\nid: src_001\nurl: https://example.com/web\n---\n\n# Web\n",
+            encoding="utf-8",
+        )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 2,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/web",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/web",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                        }
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (ws / "notes" / "findings.md").write_text(
+            "## fnd_001\n**Source:** papers/src_001\n**Fact:** path-qualified citation\n",
+            encoding="utf-8",
+        )
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "audit",
+            str(ws),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "error"
+        assert out["malformed_references"]["source_in_findings"] == ["papers/src_001"]
+
+    def test_audit_flags_unindexed_files_and_counter_drift(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "audit-drift")
+        (ws / "sources" / "web" / "src_001.md").write_text(
+            "---\nid: src_001\nurl: https://example.com/web\n---\n\n# Web\n",
+            encoding="utf-8",
+        )
+        (ws / "sources" / "papers" / "src_002.md").write_text(
+            "---\nid: src_002\nurl: https://arxiv.org/abs/2401.00002\n---\n\n# Paper A\n",
+            encoding="utf-8",
+        )
+        (ws / "sources" / "papers" / "src_003.md").write_text(
+            "---\nid: src_003\nurl: https://arxiv.org/abs/2401.00003\n---\n\n# Paper B\n",
+            encoding="utf-8",
+        )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 2,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/web",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/web",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                        }
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        cfg["next_finding_id"] = 1
+        cfg["next_insight_id"] = 1
+        (ws / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        (ws / "notes" / "findings.md").write_text(
+            "## fnd_001\n**Source:** src_001\n**Fact:** kept\n",
+            encoding="utf-8",
+        )
+        (ws / "notes" / "summary.md").write_text(
+            "## ins_001\n**Based on:** fnd_001\n**Insight:** kept\n",
+            encoding="utf-8",
+        )
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "audit",
+            str(ws),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "error"
+        assert sorted(out["filesystem_index_mismatches"]["unindexed_files"]) == [
+            "papers/src_002.md",
+            "papers/src_003.md",
+        ]
+        assert out["counters"]["next_finding_id"]["valid"] is False
+        assert out["counters"]["next_insight_id"]["valid"] is False
+
+    def test_concurrent_search_web_preserves_all_updates(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "concurrent-web")
+        cache_dir = tmp_path / "cache-web"
+        build_cache_file(
+            cache_dir,
+            "duckduckgo",
+            "query one",
+            1,
+            results=[
+                {
+                    "url": "https://example.com/one",
+                    "title": "One",
+                    "snippet": "First",
+                    "score": 0.0,
+                    "metadata": {},
+                }
+            ],
+        )
+        build_cache_file(
+            cache_dir,
+            "duckduckgo",
+            "query two",
+            1,
+            results=[
+                {
+                    "url": "https://example.com/two",
+                    "title": "Two",
+                    "snippet": "Second",
+                    "score": 0.0,
+                    "metadata": {},
+                }
+            ],
+        )
+        env = os.environ.copy()
+        env["CALIXTO_TEST_PRE_COMMIT_DELAY_MS"] = "250"
+        p1 = subprocess.Popen(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "search_web.py"),
+                "query one",
+                "--workspace",
+                str(ws),
+                "--max-results",
+                "1",
+                "--no-scrape",
+                "--use-cache",
+                "--cache-dir",
+                str(cache_dir),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        p2 = subprocess.Popen(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "search_web.py"),
+                "query two",
+                "--workspace",
+                str(ws),
+                "--max-results",
+                "1",
+                "--no-scrape",
+                "--use-cache",
+                "--cache-dir",
+                str(cache_dir),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout1, stderr1 = p1.communicate(timeout=30)
+        stdout2, stderr2 = p2.communicate(timeout=30)
+        assert p1.returncode == 0, stderr1
+        assert p2.returncode == 0, stderr2
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        idx = json.loads((ws / "sources" / "index.json").read_text(encoding="utf-8"))
+        assert len(cfg["searches"]) == 2, (stdout1, stdout2, cfg)
+        assert len(idx["sources"]) == 2
+        assert (ws / "sources" / "web" / "src_001.md").exists()
+        assert (ws / "sources" / "web" / "src_002.md").exists()
+
+    def test_concurrent_web_and_arxiv_preserve_all_updates(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "concurrent-mixed")
+        cache_dir = tmp_path / "cache-mixed"
+        build_cache_file(
+            cache_dir,
+            "duckduckgo",
+            "web query",
+            1,
+            results=[
+                {
+                    "url": "https://example.com/web",
+                    "title": "Web",
+                    "snippet": "Web snippet",
+                    "score": 0.0,
+                    "metadata": {},
+                }
+            ],
+        )
+        build_cache_file(
+            cache_dir,
+            "arxiv",
+            "paper query",
+            1,
+            results=[
+                {
+                    "arxiv_id": "2401.01234",
+                    "url": "https://arxiv.org/abs/2401.01234",
+                    "pdf_url": "https://arxiv.org/pdf/2401.01234",
+                    "title": "Paper",
+                    "summary": "Paper summary",
+                    "authors": "Ada Lovelace",
+                    "date_published": "2024-01-01",
+                    "categories": ["cs.AI"],
+                    "primary_category": "cs.AI",
+                }
+            ],
+            sort_by="relevance",
+        )
+        env = os.environ.copy()
+        env["CALIXTO_TEST_PRE_COMMIT_DELAY_MS"] = "250"
+        web_proc = subprocess.Popen(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "search_web.py"),
+                "web query",
+                "--workspace",
+                str(ws),
+                "--max-results",
+                "1",
+                "--no-scrape",
+                "--use-cache",
+                "--cache-dir",
+                str(cache_dir),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        arxiv_proc = subprocess.Popen(
+            [
+                sys.executable,
+                str(SCRIPTS_DIR / "search_arxiv.py"),
+                "paper query",
+                "--workspace",
+                str(ws),
+                "--max-results",
+                "1",
+                "--use-cache",
+                "--cache-dir",
+                str(cache_dir),
+            ],
+            cwd=REPO_ROOT,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        _, web_err = web_proc.communicate(timeout=30)
+        _, arxiv_err = arxiv_proc.communicate(timeout=30)
+        assert web_proc.returncode == 0, web_err
+        assert arxiv_proc.returncode == 0, arxiv_err
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        idx = json.loads((ws / "sources" / "index.json").read_text(encoding="utf-8"))
+        assert len(cfg["searches"]) == 2
+        assert len(idx["sources"]) == 2
+        files = {entry["file"] for entry in idx["sources"]}
+        assert any(path.startswith("web/") for path in files)
+        assert any(path.startswith("papers/") for path in files)
+
+    def test_retry_failed_updates_existing_placeholder_source(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        run_script(str(SCRIPTS_DIR / "init_workspace.py"), "retry-failed", "--path", str(tmp_path))
+        ws = tmp_path / "retry-failed"
+
+        from providers.scrape.base import ScrapeError, ScrapeResult
+        from providers.search.base import SearchResult
+        import search_web
+
+        class _StubSearchProvider:
+            def search(self, query: str, max_results: int = 10):
+                return [
+                    SearchResult(
+                        url="https://example.com/retry",
+                        title="Retry",
+                        snippet="Needs retry",
+                    )
+                ]
+
+        class _FailingScraper:
+            def scrape(self, url: str):
+                raise ScrapeError("temporary", error_type="timeout")
+
+        class _SucceedingScraper:
+            def scrape(self, url: str):
+                return ScrapeResult(
+                    url=url,
+                    title="Recovered",
+                    markdown="# Recovered\n\nfull body",
+                    metadata={},
+                )
+
+        monkeypatch.setattr(search_web, "get_search_provider", lambda name, **kwargs: _StubSearchProvider())
+        monkeypatch.setattr(search_web, "get_scrape_provider", lambda name, **kwargs: _FailingScraper())
+        first = search_web.run_search(
+            query="retry query",
+            workspace=ws,
+            max_results=1,
+            search_provider_name="duckduckgo",
+            scrape_provider_name="crawl4ai",
+            do_scrape=True,
+            truncate=10000,
+            use_cache=False,
+            clear_cache_first=False,
+            cache_dir=tmp_path / "retry-cache",
+        )
+        assert first["sources_added"] == 1
+        assert first["sources_failed"] == 1
+
+        monkeypatch.setattr(search_web, "get_scrape_provider", lambda name, **kwargs: _SucceedingScraper())
+        second = search_web.run_search(
+            query=None,
+            workspace=ws,
+            max_results=1,
+            search_provider_name="duckduckgo",
+            scrape_provider_name="crawl4ai",
+            do_scrape=True,
+            truncate=10000,
+            use_cache=False,
+            clear_cache_first=False,
+            cache_dir=tmp_path / "retry-cache",
+            retry_failed=True,
+        )
+        assert second["sources_added"] == 0
+        assert second["sources_updated"] == 1
+        source_text = (ws / "sources" / "web" / "src_001.md").read_text(encoding="utf-8")
+        meta, body = parse_frontmatter_helper(source_text)
+        assert meta["title"] == "Recovered"
+        assert "snippet_only" not in meta
+        assert body.startswith("# Recovered")
 
 
 class TestSearchWebCaching:

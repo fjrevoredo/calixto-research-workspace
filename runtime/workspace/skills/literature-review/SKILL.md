@@ -49,12 +49,23 @@ Update `config.json` with the research question:
 
 For academic work, arXiv is the primary source.
 
+Run searches sequentially. Do not queue multiple `search_arxiv.py` or
+`search_web.py` commands in one agent message, because many agents execute
+tool calls in parallel.
+
 ```bash
 uv run python scripts/search_arxiv.py "<query>" --workspace . --max-results 15 --category cs.AI
 ```
 
 Use multiple categories when relevant and run 3-5 queries that cover the main
 topic, recent work, benchmark papers, and competing approaches.
+
+After each search batch, verify the workspace state:
+
+```bash
+uv run python scripts/workspace_info.py show .
+uv run python scripts/workspace_info.py audit .
+```
 
 ### Step 3: Add selective web context
 
@@ -71,9 +82,16 @@ Treat these as secondary evidence unless they cite primary sources.
 Append findings to `notes/findings.md` and note methodology, venue, dataset,
 baseline quality, reproducibility, and obvious limitations.
 
+Use bare `src_NNN` citations only, never file paths such as `papers/src_001`.
+After writing findings, update `config.json` so `next_finding_id` is still one
+higher than the highest finding ID present.
+
 ### Step 5: Synthesize themes and gaps
 
 Use `notes/summary.md` for recurring themes, disagreements, and open questions.
+
+After writing insights, update `config.json` so `next_insight_id` is still one
+higher than the highest insight ID present.
 
 ### Step 6: Write the review
 

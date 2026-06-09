@@ -35,6 +35,7 @@ for p in (str(_REPO_ROOT), str(_SCRIPTS_DIR)):
         sys.path.insert(0, p)
 
 from _common import (
+    WorkspaceStateCoordinator,
     emit_error,
     emit_ok,
     is_valid_slug,
@@ -48,7 +49,8 @@ from _common import (
 # ---------------------------------------------------------------------------
 
 
-SRC_ID_RE = re.compile(r"\bsrc_(\d{3,})\b")
+PATH_QUALIFIED_SRC_RE = re.compile(r"\b(?:web|papers|code)/(src_(\d{3,}))\b")
+SRC_ID_RE = re.compile(r"(?<![A-Za-z0-9_/])(src_(\d{3,}))\b")
 FND_ID_RE = re.compile(r"\bfnd_(\d{3,})\b")
 INS_ID_RE = re.compile(r"\bins_(\d{3,})\b")
 
@@ -57,6 +59,92 @@ def _read_file(path: Path) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8")
+
+
+def _collect_source_references(text: str) -> tuple[set[str], list[str]]:
+    """Return valid bare source refs plus malformed path-qualified refs."""
+    refs = {match.group(1) for match in SRC_ID_RE.finditer(text)}
+    malformed = sorted({match.group(0) for match in PATH_QUALIFIED_SRC_RE.finditer(text)})
+    return refs, malformed
+
+
+def _scan_workspace_source_files(workspace: Path) -> dict[str, Any]:
+    """Scan sources/{web,papers,code} on disk and index them by file/id."""
+    source_root = workspace / "sources"
+    files_by_relpath: dict[str, dict[str, Any]] = {}
+    ids_to_paths: dict[str, list[str]] = {}
+    for source_type in ("web", "papers", "code"):
+        for path in sorted((source_root / source_type).glob("*.md")):
+            relpath = path.relative_to(source_root).as_posix()
+            frontmatter, _ = parse_frontmatter(_read_file(path))
+            source_id = str(frontmatter.get("id") or path.stem).strip()
+            files_by_relpath[relpath] = {
+                "path": path,
+                "source_id": source_id,
+                "frontmatter": frontmatter,
+            }
+            if source_id:
+                ids_to_paths.setdefault(source_id, []).append(relpath)
+    duplicate_ids = {
+        source_id: sorted(paths)
+        for source_id, paths in ids_to_paths.items()
+        if len(paths) > 1
+    }
+    return {
+        "files_by_relpath": files_by_relpath,
+        "ids_to_paths": ids_to_paths,
+        "duplicate_ids": duplicate_ids,
+    }
+
+
+def _highest_numbered_id(text: str, pattern: re.Pattern[str]) -> int:
+    """Return the highest numeric suffix matched by `pattern`, or 0."""
+    return max((int(match.group(1)) for match in pattern.finditer(text)), default=0)
+
+
+def _counter_drift(actual_next_id: Any, highest_seen: int) -> dict[str, Any]:
+    """Describe whether a next_* counter matches note contents."""
+    expected = highest_seen + 1 if highest_seen > 0 else 1
+    valid = isinstance(actual_next_id, int) and actual_next_id == expected
+    return {
+        "expected": expected,
+        "actual": actual_next_id,
+        "valid": valid,
+    }
+
+
+def _build_summary(
+    *,
+    status: str,
+    invalid_reference_count: int,
+    malformed_reference_count: int,
+    unindexed_files: int,
+    missing_index_files: int,
+    duplicate_ids: int,
+    counter_drift_count: int,
+    orphaned_sources: int,
+) -> str:
+    """Build a concise human-readable audit summary."""
+    if status == "ok":
+        return "OK: workspace index, files, citations, and counters are consistent"
+
+    reasons: list[str] = []
+    if invalid_reference_count:
+        reasons.append(f"{invalid_reference_count} invalid reference(s)")
+    if malformed_reference_count:
+        reasons.append(f"{malformed_reference_count} malformed source citation(s)")
+    if unindexed_files:
+        reasons.append(f"{unindexed_files} unindexed source file(s)")
+    if missing_index_files:
+        reasons.append(f"{missing_index_files} missing indexed file(s)")
+    if duplicate_ids:
+        reasons.append(f"{duplicate_ids} duplicate on-disk source id(s)")
+    if counter_drift_count:
+        reasons.append(f"{counter_drift_count} counter drift issue(s)")
+    if status == "warning" and orphaned_sources:
+        reasons.append(f"{orphaned_sources} orphaned source(s)")
+    prefix = "ERROR" if status == "error" else "WARNING"
+    return f"{prefix}: " + ", ".join(reasons)
 
 
 def _resolve_workspace(name_or_path: str, default_parent: Path) -> Path:
@@ -206,23 +294,40 @@ def cmd_show(workspace: Path) -> dict:
     if not (workspace / "config.json").exists():
         emit_error("workspace_not_found", f"workspace not found at {workspace}")
     try:
-        with (workspace / "config.json").open("r", encoding="utf-8") as f:
-            cfg = json.load(f)
+        with WorkspaceStateCoordinator(workspace) as coordinator:
+            cfg = coordinator.config
+            idx = coordinator.index
+            recovery = coordinator.recovery
+            scanned = _scan_workspace_source_files(workspace)
     except (json.JSONDecodeError, OSError) as e:
-        emit_error("config_corrupt", f"could not read config.json: {e}")
+        emit_error("workspace_corrupt", f"could not read workspace metadata: {e}")
 
-    index_path = workspace / "sources" / "index.json"
-    sources_by_type: dict[str, int] = {"web": 0, "papers": 0, "code": 0}
-    if index_path.exists():
-        try:
-            with index_path.open("r", encoding="utf-8") as f:
-                idx = json.load(f)
-            for s in idx.get("sources", []):
-                file_field = s.get("file", "")
-                t = file_field.split("/", 1)[0] if "/" in file_field else "other"
-                sources_by_type[t] = sources_by_type.get(t, 0) + 1
-        except (json.JSONDecodeError, OSError):
-            pass
+    indexed_counts: dict[str, int] = {"web": 0, "papers": 0, "code": 0}
+    for source in idx.get("sources", []):
+        file_field = str(source.get("file", ""))
+        source_type = file_field.split("/", 1)[0] if "/" in file_field else "other"
+        indexed_counts[source_type] = indexed_counts.get(source_type, 0) + 1
+
+    file_counts: dict[str, int] = {"web": 0, "papers": 0, "code": 0}
+    for relpath in scanned["files_by_relpath"]:
+        source_type = relpath.split("/", 1)[0]
+        file_counts[source_type] = file_counts.get(source_type, 0) + 1
+
+    indexed_files = {
+        str(source.get("file", "")).strip()
+        for source in idx.get("sources", [])
+        if str(source.get("file", "")).strip()
+    }
+    unindexed_files = sorted(
+        relpath
+        for relpath in scanned["files_by_relpath"]
+        if relpath not in indexed_files
+    )
+    missing_index_files = sorted(
+        relpath
+        for relpath in indexed_files
+        if relpath not in scanned["files_by_relpath"]
+    )
 
     return {
         "workspace": str(workspace),
@@ -230,14 +335,26 @@ def cmd_show(workspace: Path) -> dict:
         "question": cfg.get("question", ""),
         "scope": cfg.get("scope", {}),
         "providers": cfg.get("providers", {}),
-        "source_counts": sources_by_type,
-        "total_sources": sum(sources_by_type.values()),
+        "source_counts": indexed_counts,
+        "total_sources": sum(indexed_counts.values()),
+        "source_file_counts": file_counts,
+        "source_file_count": sum(file_counts.values()),
         "search_count": len(cfg.get("searches", [])),
         "next_source_id": cfg.get("next_source_id", 1),
         "next_finding_id": cfg.get("next_finding_id", 1),
         "next_insight_id": cfg.get("next_insight_id", 1),
         "created_at": cfg.get("created_at", ""),
         "updated_at": cfg.get("updated_at", ""),
+        "consistency": {
+            "indexed_source_count": sum(indexed_counts.values()),
+            "source_file_count": sum(file_counts.values()),
+            "counts_match": sum(indexed_counts.values()) == sum(file_counts.values()),
+            "unindexed_files": unindexed_files,
+            "missing_index_files": missing_index_files,
+            "duplicate_source_ids": scanned["duplicate_ids"],
+            "recovered_transactions": recovery.get("recovered", []),
+            "discarded_staged_transactions": recovery.get("discarded", []),
+        },
     }
 
 
@@ -295,111 +412,173 @@ def cmd_audit(workspace: Path) -> dict:
     """
     if not (workspace / "config.json").exists():
         emit_error("workspace_not_found", f"workspace not found at {workspace}")
+    try:
+        with WorkspaceStateCoordinator(workspace) as coordinator:
+            cfg = coordinator.config
+            idx = coordinator.index
+            recovery = coordinator.recovery
+            scanned = _scan_workspace_source_files(workspace)
+            findings_text = _read_file(workspace / "notes" / "findings.md")
+            summary_text = _read_file(workspace / "notes" / "summary.md")
+            report_text = _read_file(workspace / "outputs" / "report.md")
+    except (json.JSONDecodeError, OSError) as e:
+        emit_error("workspace_corrupt", f"could not read workspace metadata: {e}")
 
-    # Load the source index
-    index_path = workspace / "sources" / "index.json"
-    known_src_ids: set[str] = set()
-    if index_path.exists():
-        try:
-            with index_path.open("r", encoding="utf-8") as f:
-                idx = json.load(f)
-            known_src_ids = {s.get("id") for s in idx.get("sources", []) if s.get("id")}
-        except (json.JSONDecodeError, OSError) as e:
-            emit_error("index_corrupt", f"could not read index.json: {e}")
+    index_entries = idx.get("sources", [])
+    known_src_ids = {
+        str(entry.get("id", "")).strip()
+        for entry in index_entries
+        if str(entry.get("id", "")).strip()
+    }
+    index_entries_by_id: dict[str, list[dict[str, Any]]] = {}
+    indexed_files: dict[str, dict[str, Any]] = {}
+    for entry in index_entries:
+        source_id = str(entry.get("id", "")).strip()
+        file_relpath = str(entry.get("file", "")).strip()
+        if source_id:
+            index_entries_by_id.setdefault(source_id, []).append(entry)
+        if file_relpath:
+            indexed_files[file_relpath] = entry
 
-    # Read findings, summary, report
-    findings_text = _read_file(workspace / "notes" / "findings.md")
-    summary_text = _read_file(workspace / "notes" / "summary.md")
-    report_text = _read_file(workspace / "outputs" / "report.md")
+    duplicate_index_ids = {
+        source_id: sorted(str(entry.get("file", "")) for entry in entries)
+        for source_id, entries in index_entries_by_id.items()
+        if len(entries) > 1
+    }
+    unindexed_files = sorted(
+        relpath
+        for relpath in scanned["files_by_relpath"]
+        if relpath not in indexed_files
+    )
+    missing_index_files = sorted(
+        relpath
+        for relpath in indexed_files
+        if relpath not in scanned["files_by_relpath"]
+    )
+    frontmatter_id_mismatches: list[dict[str, str]] = []
+    valid_source_ids: set[str] = set()
+    for file_relpath, entry in indexed_files.items():
+        on_disk = scanned["files_by_relpath"].get(file_relpath)
+        if not on_disk:
+            continue
+        disk_id = str(on_disk["source_id"]).strip()
+        index_id = str(entry.get("id", "")).strip()
+        if disk_id and index_id and disk_id != index_id:
+            frontmatter_id_mismatches.append(
+                {
+                    "file": file_relpath,
+                    "index_id": index_id,
+                    "frontmatter_id": disk_id,
+                }
+            )
+            continue
+        if index_id:
+            valid_source_ids.add(index_id)
 
-    # Extract finding IDs by `## fnd_NNN` headers
-    known_fnd_ids: set[str] = set()
-    for m in re.finditer(r"^##\s+fnd_(\d{3,})\b", findings_text, re.MULTILINE):
-        known_fnd_ids.add(f"fnd_{m.group(1)}")
+    known_fnd_ids = {f"fnd_{match.group(1)}" for match in re.finditer(r"^##\s+fnd_(\d{3,})\b", findings_text, re.MULTILINE)}
+    known_ins_ids = {f"ins_{match.group(1)}" for match in re.finditer(r"^##\s+ins_(\d{3,})\b", summary_text, re.MULTILINE)}
 
-    # Source IDs referenced in findings (from **Source:** lines)
     findings_src_refs: set[str] = set()
-    for m in re.finditer(r"\*\*Source:\*\*\s*([^\n]+)", findings_text):
-        for sid in SRC_ID_RE.findall(m.group(1)):
-            findings_src_refs.add(f"src_{sid}")
+    malformed_findings_refs: list[str] = []
+    for match in re.finditer(r"\*\*Source:\*\*\s*([^\n]+)", findings_text):
+        refs, malformed = _collect_source_references(match.group(1))
+        findings_src_refs.update(refs)
+        malformed_findings_refs.extend(malformed)
 
-    # Finding IDs referenced in summary
     summary_fnd_refs: set[str] = set()
-    for m in re.finditer(r"\*\*Based on:\*\*\s*([^\n]+)", summary_text):
-        for fid in FND_ID_RE.findall(m.group(1)):
+    for match in re.finditer(r"\*\*Based on:\*\*\s*([^\n]+)", summary_text):
+        for fid in FND_ID_RE.findall(match.group(1)):
             summary_fnd_refs.add(f"fnd_{fid}")
 
-    # Source IDs cited in report
-    report_src_refs: set[str] = set()
-    for sid in SRC_ID_RE.findall(report_text):
-        report_src_refs.add(f"src_{sid}")
+    report_src_refs, malformed_report_refs = _collect_source_references(report_text)
 
-    # Compute orphans and invalid references
-    invalid_src_in_findings = findings_src_refs - known_src_ids
+    invalid_src_in_findings = findings_src_refs - valid_source_ids
     invalid_fnd_in_summary = summary_fnd_refs - known_fnd_ids
-    invalid_src_in_report = report_src_refs - known_src_ids
+    invalid_src_in_report = report_src_refs - valid_source_ids
+    orphaned_src = known_src_ids - (findings_src_refs | report_src_refs)
 
-    all_cited = findings_src_refs | report_src_refs
-    orphaned_src = known_src_ids - all_cited
+    highest_src = max((int(source_id.split("_", 1)[1]) for source_id in known_src_ids), default=0)
+    source_counter = _counter_drift(idx.get("next_id", 1), highest_src)
+    finding_counter = _counter_drift(cfg.get("next_finding_id", 1), _highest_numbered_id(findings_text, FND_ID_RE))
+    insight_counter = _counter_drift(cfg.get("next_insight_id", 1), _highest_numbered_id(summary_text, INS_ID_RE))
 
-    # Check next_id matches count
-    next_id_expected = (max((int(sid.split("_", 1)[1]) for sid in known_src_ids), default=0)) + 1
-    next_id_in_index = idx.get("next_id", 1) if index_path.exists() else 1
-    id_counter_valid = next_id_expected == next_id_in_index
-
-    # Status
-    total_errors = (
-        len(invalid_src_in_findings) + len(invalid_fnd_in_summary) + len(invalid_src_in_report)
+    invalid_reference_count = (
+        len(invalid_src_in_findings)
+        + len(invalid_fnd_in_summary)
+        + len(invalid_src_in_report)
     )
-    if total_errors == 0 and id_counter_valid:
-        status = "ok"
-    elif total_errors == 0:
-        status = "warning"  # orphans or id counter issue, no broken refs
-    else:
+    malformed_reference_count = len(set(malformed_findings_refs)) + len(set(malformed_report_refs))
+    counter_drift_count = sum(
+        not counter["valid"]
+        for counter in (source_counter, finding_counter, insight_counter)
+    )
+    hard_failure_count = (
+        invalid_reference_count
+        + malformed_reference_count
+        + len(unindexed_files)
+        + len(missing_index_files)
+        + len(scanned["duplicate_ids"])
+        + len(duplicate_index_ids)
+        + len(frontmatter_id_mismatches)
+        + counter_drift_count
+    )
+    if hard_failure_count:
         status = "error"
+    elif orphaned_src:
+        status = "warning"
+    else:
+        status = "ok"
 
     return {
         "workspace": str(workspace),
         "status": status,
         "sources_in_index": len(known_src_ids),
+        "source_files_on_disk": len(scanned["files_by_relpath"]),
         "findings_count": len(known_fnd_ids),
+        "insights_count": len(known_ins_ids),
         "sources_cited_in_findings": len(findings_src_refs),
         "sources_cited_in_report": len(report_src_refs),
         "findings_referenced_in_summary": len(summary_fnd_refs),
         "orphaned_sources": sorted(orphaned_src),
+        "filesystem_index_mismatches": {
+            "unindexed_files": unindexed_files,
+            "missing_index_files": missing_index_files,
+            "frontmatter_id_mismatches": frontmatter_id_mismatches,
+        },
+        "duplicate_source_ids": {
+            "on_disk": scanned["duplicate_ids"],
+            "in_index": duplicate_index_ids,
+        },
         "invalid_references": {
             "source_in_findings": sorted(invalid_src_in_findings),
             "finding_in_summary": sorted(invalid_fnd_in_summary),
             "source_in_report": sorted(invalid_src_in_report),
         },
-        "id_counter_valid": id_counter_valid,
-        "id_counter_expected": next_id_expected,
-        "id_counter_actual": next_id_in_index,
-        "summary": _audit_summary(
-            len(known_src_ids),
-            len(findings_src_refs),
-            len(report_src_refs),
-            len(orphaned_src),
-            total_errors,
+        "malformed_references": {
+            "source_in_findings": sorted(set(malformed_findings_refs)),
+            "source_in_report": sorted(set(malformed_report_refs)),
+        },
+        "counters": {
+            "source_index_next_id": source_counter,
+            "next_finding_id": finding_counter,
+            "next_insight_id": insight_counter,
+        },
+        "id_counter_valid": source_counter["valid"],
+        "id_counter_expected": source_counter["expected"],
+        "id_counter_actual": source_counter["actual"],
+        "recovered_transactions": recovery.get("recovered", []),
+        "discarded_staged_transactions": recovery.get("discarded", []),
+        "summary": _build_summary(
+            status=status,
+            invalid_reference_count=invalid_reference_count,
+            malformed_reference_count=malformed_reference_count,
+            unindexed_files=len(unindexed_files),
+            missing_index_files=len(missing_index_files),
+            duplicate_ids=len(scanned["duplicate_ids"]) + len(duplicate_index_ids),
+            counter_drift_count=counter_drift_count,
+            orphaned_sources=len(orphaned_src),
         ),
     }
-
-
-def _audit_summary(
-    total: int,
-    cited_in_findings: int,
-    cited_in_report: int,
-    orphans: int,
-    invalid_count: int,
-) -> str:
-    """Build a human-readable one-line audit summary."""
-    if total == 0:
-        return "No sources yet"
-    if invalid_count > 0:
-        return f"FAIL: {invalid_count} invalid reference(s) detected"
-    if orphans == 0 and cited_in_report == total:
-        return f"OK: {total} sources, all cited"
-    return f"OK with warnings: {total} sources, {orphans} orphaned, {cited_in_report} cited in report"
 
 
 # ---------------------------------------------------------------------------

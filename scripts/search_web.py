@@ -12,6 +12,7 @@ Usage:
         [--search-provider duckduckgo|brave]
         [--scrape-provider crawl4ai]
         [--no-scrape]                      # save snippets only, skip scraping
+        [--retry-failed]                  # retry only failed URLs from the latest web search
         [--truncate 10000]                 # max words per source (0 = no limit)
         [--use-cache]                      # use cached search results (golden runs)
         [--clear-cache]                    # delete cache before running
@@ -24,9 +25,9 @@ Architecture:
     1. Load workspace config and source index
     2. Initialize search provider and (optionally) scrape provider
     3. Call search provider for URLs
-    4. Deduplicate by normalized URL via sources/index.json
-    5. For each new URL: scrape (unless --no-scrape), assign ID, save markdown
-    6. Update index.json and config.json
+    4. Prepare scrape results outside the workspace mutation lock
+    5. Re-deduplicate and assign IDs under a shared workspace coordinator
+    6. Commit source files, sources/index.json, and config.json as one staged transaction
     7. Print final JSON status
 
 See:
@@ -41,6 +42,7 @@ import argparse
 import hashlib
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -56,6 +58,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 from _common import (
+    WorkspaceStateCoordinator,
     emit_error,
     emit_ok,
     emit_partial,
@@ -63,8 +66,6 @@ from _common import (
     load_workspace_config,
     normalize_url,
     render_frontmatter,
-    save_source_index,
-    save_workspace_config,
     source_id_for,
     truncate_markdown,
     utcnow_iso,
@@ -78,6 +79,19 @@ log = logging.getLogger(__name__)
 def default_cache_dir(workspace: Path) -> Path:
     """Return the default cache directory for a standalone workspace."""
     return workspace / ".calixto" / "cache"
+
+
+def maybe_test_precommit_delay() -> None:
+    """Deterministic test hook for concurrent-search regression coverage."""
+    delay_ms = os.environ.get("CALIXTO_TEST_PRE_COMMIT_DELAY_MS", "").strip()
+    if not delay_ms:
+        return
+    try:
+        delay_value = int(delay_ms)
+    except ValueError:
+        return
+    if delay_value > 0:
+        time.sleep(delay_value / 1000.0)
 
 
 # ---------------------------------------------------------------------------
@@ -201,40 +215,40 @@ def clear_cache(cache_dir: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
-def existing_url_set(index: dict) -> set[str]:
-    """Return the set of normalized URLs already in the index."""
+def existing_url_map(index: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+    """Map normalized URLs to the index entries that already use them."""
+    mapping: dict[str, list[dict[str, Any]]] = {}
+    for entry in index.get("sources", []):
+        url = str(entry.get("url", "")).strip()
+        normalized = str(entry.get("url_normalized") or normalize_url(url)).strip()
+        if not normalized:
+            continue
+        mapping.setdefault(normalized, []).append(entry)
+    return mapping
+
+
+def duplicate_detail(url: str, matching_entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Describe a duplicate URL match for stdout/config history."""
     return {
-        (s.get("url_normalized") or normalize_url(s.get("url", "")))
-        for s in index.get("sources", [])
-        if s.get("url")
+        "url": url,
+        "url_normalized": normalize_url(url),
+        "existing_source_ids": sorted(
+            str(entry.get("id", "")).strip()
+            for entry in matching_entries
+            if str(entry.get("id", "")).strip()
+        ),
     }
 
 
-def write_source(
-    workspace: Path,
-    source_id: str,
-    frontmatter: dict[str, Any],
-    body: str,
-) -> Path:
-    """Save a source's markdown file to sources/web/<id>.md and return its path."""
-    target_dir = workspace / "sources" / "web"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / f"{source_id}.md"
-    target.write_text(render_frontmatter(frontmatter, body), encoding="utf-8")
-    return target
-
-
-def add_to_index(
-    workspace: Path,
-    index: dict,
+def index_entry_for_source(
     source_id: str,
     url: str,
     file_relpath: str,
     query: str,
     source_word_count: int,
     extras: dict[str, Any] | None = None,
-) -> dict:
-    """Append a new source entry to the index (in memory). Returns the new entry."""
+) -> dict[str, Any]:
+    """Build a normalized source-index entry."""
     entry: dict[str, Any] = {
         "id": source_id,
         "url": url,
@@ -246,8 +260,167 @@ def add_to_index(
     }
     if extras:
         entry.update(extras)
-    index.setdefault("sources", []).append(entry)
     return entry
+
+
+def latest_failed_web_search(config: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the most recent web-search record that still has retryable failures."""
+    for search in reversed(config.get("searches", [])):
+        failures = search.get("failures", [])
+        provider = str(search.get("provider", "")).strip()
+        if provider and provider != "arxiv" and isinstance(failures, list) and failures:
+            return search
+    return None
+
+
+def failure_entries_to_results(search_record: dict[str, Any]) -> list[dict[str, Any]]:
+    """Convert persisted failure metadata into raw-result shaped records."""
+    results: list[dict[str, Any]] = []
+    for failure in search_record.get("failures", []):
+        url = str(failure.get("url", "")).strip()
+        if not url:
+            continue
+        results.append(
+            {
+                "url": url,
+                "title": failure.get("title", ""),
+                "snippet": failure.get("snippet", ""),
+                "score": 0.0,
+                "metadata": {
+                    "retry_source_id": failure.get("source_id"),
+                    "retry_error": failure.get("error"),
+                },
+            }
+        )
+    return results
+
+
+def metadata_passthrough(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Return provider metadata fields worth persisting into source state."""
+    passthrough: dict[str, Any] = {}
+    for key, value in metadata.items():
+        if key == "provider" or value in (None, ""):
+            continue
+        if isinstance(value, (str, int, float, bool, list, dict)):
+            passthrough[key] = value
+    return passthrough
+
+
+def build_source_frontmatter(
+    *,
+    source_id: str,
+    url: str,
+    title: str,
+    query: str,
+    scrape_provider_name: str,
+    search_provider_name: str,
+    word_count_value: int,
+    extra_metadata: dict[str, Any],
+) -> dict[str, Any]:
+    """Create the frontmatter payload for a saved web source."""
+    frontmatter: dict[str, Any] = {
+        "id": source_id,
+        "url": url,
+        "title": title,
+        "date_crawled": utcnow_iso(),
+        "provider": scrape_provider_name,
+        "search_provider": search_provider_name,
+        "query": query,
+        "word_count": word_count_value,
+        "truncated": False,
+    }
+    frontmatter.update(extra_metadata)
+    return frontmatter
+
+
+def prepare_candidate_source(
+    result: dict[str, Any],
+    *,
+    query: str,
+    do_scrape: bool,
+    scrape_provider_name: str,
+    search_provider_name: str,
+    truncate: int,
+    scrape_provider: Any | None,
+) -> dict[str, Any]:
+    """Scrape or format one search result before the final locked commit."""
+    url = str(result.get("url", "")).strip()
+    title = str(result.get("title", "")).strip()
+    snippet = str(result.get("snippet", "")).strip()
+    prepared: dict[str, Any] = {
+        "url": url,
+        "normalized_url": normalize_url(url),
+        "search_title": title,
+        "snippet": snippet,
+        "retry_source_id": result.get("metadata", {}).get("retry_source_id"),
+    }
+
+    extra_metadata: dict[str, Any] = {}
+    body = ""
+    failure: dict[str, Any] | None = None
+
+    if do_scrape and scrape_provider is not None:
+        try:
+            scrape_result = scrape_provider.scrape(url)
+            extra_metadata.update(metadata_passthrough(scrape_result.metadata))
+            title = scrape_result.title or title
+            if scrape_result.markdown:
+                body = scrape_result.markdown
+            else:
+                error_type = str(scrape_result.metadata.get("error", "no_content"))
+                failure = {
+                    "url": url,
+                    "title": title,
+                    "snippet": snippet,
+                    "error": error_type,
+                    "message": str(scrape_result.metadata.get("error_message") or error_type),
+                    "retryable": True,
+                }
+                extra_metadata["error"] = error_type
+                extra_metadata["snippet_only"] = True
+                body = _snippet_only_body(snippet, url)
+        except Exception as exc:
+            from providers.scrape.base import ScrapeError
+
+            if isinstance(exc, ScrapeError):
+                error_type = exc.error_type
+            else:
+                error_type = "scrape_exception"
+            failure = {
+                "url": url,
+                "title": title,
+                "snippet": snippet,
+                "error": error_type,
+                "message": str(exc),
+                "retryable": True,
+            }
+            extra_metadata["error"] = error_type
+            extra_metadata["snippet_only"] = True
+            body = _snippet_only_body(snippet, url)
+    else:
+        body = _snippet_only_body(snippet, url)
+        extra_metadata["snippet_only"] = True
+
+    word_count_value = word_count(body)
+    if truncate and truncate > 0 and word_count_value > truncate:
+        original_wc = word_count_value
+        body = truncate_markdown(body, truncate)
+        word_count_value = word_count(body)
+        extra_metadata["truncated"] = True
+        extra_metadata["original_word_count"] = original_wc
+
+    prepared["title"] = title
+    prepared["body"] = body
+    prepared["word_count"] = word_count_value
+    prepared["frontmatter_extra"] = extra_metadata
+    prepared["index_extra"] = {
+        "title": title,
+        "search_provider": search_provider_name,
+        **metadata_passthrough(extra_metadata),
+    }
+    if failure is not None:
+        prepared["failure"] = failure
+    return prepared
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +429,7 @@ def add_to_index(
 
 
 def run_search(
-    query: str,
+    query: str | None,
     workspace: Path,
     max_results: int,
     search_provider_name: str,
@@ -266,43 +439,65 @@ def run_search(
     use_cache: bool,
     clear_cache_first: bool,
     cache_dir: Path,
+    retry_failed: bool = False,
 ) -> dict:
     """Execute the full search-and-persist flow. Returns a status dict."""
-    # Validate workspace
     if not workspace.exists() or not (workspace / "config.json").exists():
         emit_error(
             "workspace_not_found",
             f"workspace not found at {workspace}. Run init_workspace.py first.",
         )
 
-    config = load_workspace_config(workspace)
-    index = load_source_index(workspace)
+    initial_config = load_workspace_config(workspace)
+    initial_index = load_source_index(workspace)
 
-    # Optional: provider overrides from workspace config
     if not search_provider_name:
-        search_provider_name = config.get("providers", {}).get("search", "duckduckgo")
+        search_provider_name = initial_config.get("providers", {}).get("search", "duckduckgo")
     if not scrape_provider_name:
-        scrape_provider_name = config.get("providers", {}).get("scrape", "crawl4ai")
+        scrape_provider_name = initial_config.get("providers", {}).get("scrape", "crawl4ai")
 
-    # Clear cache if requested
+    retry_context: dict[str, Any] | None = None
+    raw_results: list[dict[str, Any]] | None = None
+
+    if retry_failed:
+        retry_search = latest_failed_web_search(initial_config)
+        if retry_search is None:
+            emit_error(
+                "no_failed_results",
+                "no previous web-search failures were found in this workspace",
+            )
+        raw_results = failure_entries_to_results(retry_search)
+        if not raw_results:
+            emit_error(
+                "no_failed_results",
+                "the latest failed web-search record does not contain retryable URLs",
+            )
+        query = str(retry_search.get("query", "")).strip()
+        if not query:
+            emit_error(
+                "invalid_retry_record",
+                "the latest failed web-search record is missing its original query",
+            )
+        search_provider_name = search_provider_name or str(retry_search.get("provider", "")).strip()
+        retry_context = {
+            "query": retry_search.get("query", ""),
+            "timestamp": retry_search.get("timestamp", ""),
+        }
+    elif not query or not query.strip():
+        emit_error("invalid_query", "query must be a non-empty string")
+    else:
+        query = query.strip()
+
     if clear_cache_first and cache_dir.exists():
         removed = clear_cache(cache_dir)
         log.info("cleared %d cache files", removed)
 
-    # Cache lookup must happen BEFORE provider initialization. The cache is
-    # the cheaper path and avoids paying the cost of importing the search
-    # package (e.g. ddgs, requests) when we already have a stored result.
     cache_dir.mkdir(parents=True, exist_ok=True)
-    raw_results: list[dict] | None = None
-    if use_cache:
+    if raw_results is None and use_cache:
         raw_results = load_cache(cache_dir, search_provider_name, query, max_results)
         if raw_results is not None:
             log.info("using cached results: %d items", len(raw_results))
         else:
-            # Reproducible mode: a cache miss must fail loudly rather than
-            # silently falling back to a live network call. This matches
-            # the contract in requirements.md section 10.2: cache hits are
-            # used, cache misses during a reproducible run are errors.
             emit_error(
                 "cache_miss",
                 f"no cached result for provider={search_provider_name!r} "
@@ -311,13 +506,13 @@ def run_search(
                 "re-run without --use-cache to populate the cache.",
             )
 
-    # Provider is only needed when we will actually call the network.
     if raw_results is None:
         search_provider = get_search_provider(search_provider_name)
         try:
             search_results = search_provider.search(query, max_results=max_results)
         except Exception as e:
             from providers.search.base import SearchError
+
             if isinstance(e, SearchError):
                 emit_error(
                     "search_failed",
@@ -335,48 +530,24 @@ def run_search(
             }
             for r in search_results
         ]
-        # Always write the cache after a successful live call so subsequent
-        # --use-cache runs can replay it. This decouples cache writes from
-        # the --use-cache flag, which now means "require cache hit".
         save_cache(cache_dir, search_provider_name, query, max_results, raw_results)
 
-    # Deduplicate
-    seen = existing_url_set(index)
-    new_results: list[dict] = []
-    skipped = 0
-    for r in raw_results:
-        norm = normalize_url(r["url"])
-        if not norm or norm in seen:
-            skipped += 1
+    initial_url_map = existing_url_map(initial_index)
+    candidates_to_prepare: list[dict[str, Any]] = []
+    best_effort_duplicates: list[dict[str, Any]] = []
+    seen_candidate_urls: set[str] = set()
+    for result in raw_results:
+        url = str(result.get("url", "")).strip()
+        normalized = normalize_url(url)
+        if not normalized or normalized in seen_candidate_urls:
+            best_effort_duplicates.append(duplicate_detail(url, initial_url_map.get(normalized, [])))
             continue
-        seen.add(norm)
-        new_results.append(r)
+        seen_candidate_urls.add(normalized)
+        if not retry_failed and normalized in initial_url_map:
+            best_effort_duplicates.append(duplicate_detail(url, initial_url_map[normalized]))
+            continue
+        candidates_to_prepare.append(result)
 
-    if not new_results:
-        # Record the search attempt and exit cleanly
-        config.setdefault("searches", []).append(
-            {
-                "query": query,
-                "provider": search_provider_name,
-                "timestamp": utcnow_iso(),
-                "results_count": len(raw_results),
-                "urls_found": [r["url"] for r in raw_results],
-                "sources_added": 0,
-                "sources_skipped": skipped,
-            }
-        )
-        config["next_source_id"] = index.get("next_id", 1)
-        save_workspace_config(workspace, config)
-        save_source_index(workspace, index)
-        return {
-            "sources_added": 0,
-            "sources_skipped": skipped,
-            "source_ids": [],
-            "workspace": str(workspace),
-            "query": query,
-        }
-
-    # Scrape (unless --no-scrape)
     scrape_provider = None
     if do_scrape:
         try:
@@ -384,98 +555,141 @@ def run_search(
         except Exception as e:
             emit_error("scrape_init_failed", f"could not initialize scrape provider: {e}")
 
-    added_ids: list[str] = []
-    errors: list[dict] = []
-    next_id = index.get("next_id", 1)
-
-    for r in new_results:
-        url = r["url"]
-        title = r.get("title", "")
-        snippet = r.get("snippet", "")
-
-        source_id = source_id_for(next_id)
-        next_id += 1
-
-        frontmatter: dict[str, Any] = {
-            "id": source_id,
-            "url": url,
-            "title": title,
-            "date_crawled": utcnow_iso(),
-            "provider": scrape_provider_name if do_scrape else "none",
-            "search_provider": search_provider_name,
-            "query": query,
-            "word_count": 0,
-            "truncated": False,
-        }
-
-        body = ""
-
-        if do_scrape and scrape_provider is not None:
-            try:
-                scrape_result = scrape_provider.scrape(url)
-                frontmatter["title"] = scrape_result.title or title
-                # If scrape failed, keep the snippet as the body
-                if scrape_result.markdown:
-                    body = scrape_result.markdown
-                    frontmatter["word_count"] = scrape_result.word_count
-                else:
-                    err = scrape_result.metadata.get("error", "no_content")
-                    frontmatter["error"] = err
-                    body = _snippet_only_body(snippet, url)
-                    frontmatter["word_count"] = word_count(body)
-                # Pass through any interesting scrape metadata
-                for k in ("description", "author"):
-                    if scrape_result.metadata.get(k):
-                        frontmatter[k] = scrape_result.metadata[k]
-            except Exception as e:
-                from providers.scrape.base import ScrapeError
-                if isinstance(e, ScrapeError):
-                    frontmatter["error"] = e.error_type
-                    errors.append({"url": url, "error": e.error_type, "message": str(e)})
-                else:
-                    frontmatter["error"] = "scrape_exception"
-                    errors.append({"url": url, "error": "scrape_exception", "message": str(e)})
-                body = _snippet_only_body(snippet, url)
-                frontmatter["word_count"] = word_count(body)
-        else:
-            body = _snippet_only_body(snippet, url)
-            frontmatter["word_count"] = word_count(body)
-            frontmatter["snippet_only"] = True
-
-        # Truncation
-        if truncate and truncate > 0 and frontmatter["word_count"] > truncate:
-            original_wc = frontmatter["word_count"]
-            body = truncate_markdown(body, truncate)
-            frontmatter["word_count"] = word_count(body)
-            frontmatter["truncated"] = True
-            frontmatter["original_word_count"] = original_wc
-
-        relpath = f"web/{source_id}.md"
-        write_source(workspace, source_id, frontmatter, body)
-        add_to_index(
-            workspace,
-            index,
-            source_id,
-            url,
-            relpath,
-            query,
-            frontmatter["word_count"],
-            extras={
-                "title": frontmatter.get("title", ""),
-                "search_provider": search_provider_name,
-            },
+    prepared_candidates: list[dict[str, Any]] = []
+    for pos, raw_result in enumerate(candidates_to_prepare):
+        prepared_candidates.append(
+            prepare_candidate_source(
+                raw_result,
+                query=query,
+                do_scrape=do_scrape,
+                scrape_provider_name=scrape_provider_name if do_scrape else "none",
+                search_provider_name=search_provider_name,
+                truncate=truncate,
+                scrape_provider=scrape_provider,
+            )
         )
-        added_ids.append(source_id)
-        # Polite delay between scrapes
-        if do_scrape and len(new_results) > 1:
+        if do_scrape and pos < (len(candidates_to_prepare) - 1):
             time.sleep(1.0)
 
-    # Update index next_id
-    index["next_id"] = next_id
+    added_ids: list[str] = []
+    updated_ids: list[str] = []
+    duplicate_matches: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
 
-    # Record search
-    config.setdefault("searches", []).append(
-        {
+    maybe_test_precommit_delay()
+
+    with WorkspaceStateCoordinator(workspace) as coordinator:
+        config = coordinator.config
+        index = coordinator.index
+        url_map = existing_url_map(index)
+        next_id = index.get("next_id", 1)
+        source_files: list[dict[str, str]] = []
+
+        for prepared in prepared_candidates:
+            normalized = prepared["normalized_url"]
+            existing_entries = url_map.get(normalized, [])
+            retry_source_id = str(prepared.get("retry_source_id") or "").strip()
+
+            if retry_source_id:
+                target_entry = next(
+                    (entry for entry in existing_entries if str(entry.get("id", "")).strip() == retry_source_id),
+                    None,
+                )
+                if target_entry is not None:
+                    if prepared.get("failure"):
+                        failure = dict(prepared["failure"])
+                        failure["source_id"] = retry_source_id
+                        failures.append(failure)
+                        continue
+
+                    frontmatter = build_source_frontmatter(
+                        source_id=retry_source_id,
+                        url=prepared["url"],
+                        title=prepared["title"],
+                        query=query,
+                        scrape_provider_name=scrape_provider_name if do_scrape else "none",
+                        search_provider_name=search_provider_name,
+                        word_count_value=prepared["word_count"],
+                        extra_metadata=prepared["frontmatter_extra"],
+                    )
+                    relpath = f"sources/{target_entry['file']}"
+                    source_files.append(
+                        {
+                            "relpath": relpath,
+                            "content": render_frontmatter(frontmatter, prepared["body"]),
+                        }
+                    )
+                    target_entry.update(
+                        {
+                            "url": prepared["url"],
+                            "url_normalized": normalized,
+                            "query": query,
+                            "word_count": prepared["word_count"],
+                            "title": prepared["title"],
+                            "search_provider": search_provider_name,
+                            "retried_at": utcnow_iso(),
+                        }
+                    )
+                    target_entry.pop("error", None)
+                    for key, value in prepared["index_extra"].items():
+                        if value in (None, ""):
+                            target_entry.pop(key, None)
+                        else:
+                            target_entry[key] = value
+                    updated_ids.append(retry_source_id)
+                    continue
+
+            if existing_entries:
+                duplicate_matches.append(duplicate_detail(prepared["url"], existing_entries))
+                continue
+
+            source_id = source_id_for(next_id)
+            next_id += 1
+            frontmatter = build_source_frontmatter(
+                source_id=source_id,
+                url=prepared["url"],
+                title=prepared["title"],
+                query=query,
+                scrape_provider_name=scrape_provider_name if do_scrape else "none",
+                search_provider_name=search_provider_name,
+                word_count_value=prepared["word_count"],
+                extra_metadata=prepared["frontmatter_extra"],
+            )
+            relpath = f"web/{source_id}.md"
+            source_files.append(
+                {
+                    "relpath": f"sources/{relpath}",
+                    "content": render_frontmatter(frontmatter, prepared["body"]),
+                }
+            )
+            entry = index_entry_for_source(
+                source_id,
+                prepared["url"],
+                relpath,
+                query,
+                prepared["word_count"],
+                extras=prepared["index_extra"],
+            )
+            index.setdefault("sources", []).append(entry)
+            url_map.setdefault(normalized, []).append(entry)
+            added_ids.append(source_id)
+            if prepared.get("failure"):
+                failure = dict(prepared["failure"])
+                failure["source_id"] = source_id
+                failures.append(failure)
+
+        index["next_id"] = next_id
+
+        deduped_duplicates = {
+            json.dumps(detail, sort_keys=True): detail
+            for detail in (best_effort_duplicates + duplicate_matches)
+        }
+        duplicate_matches = sorted(
+            deduped_duplicates.values(),
+            key=lambda detail: (detail.get("url_normalized", ""), detail.get("url", "")),
+        )
+
+        search_record: dict[str, Any] = {
             "query": query,
             "provider": search_provider_name,
             "scrape_provider": scrape_provider_name if do_scrape else None,
@@ -483,24 +697,38 @@ def run_search(
             "results_count": len(raw_results),
             "urls_found": [r["url"] for r in raw_results],
             "sources_added": len(added_ids),
-            "sources_skipped": skipped,
-            "source_ids": added_ids,
+            "sources_updated": len(updated_ids),
+            "sources_skipped": len(duplicate_matches),
+            "source_ids": added_ids + updated_ids,
+            "duplicate_matches": duplicate_matches,
         }
-    )
-    config["next_source_id"] = next_id
-    save_workspace_config(workspace, config)
-    save_source_index(workspace, index)
+        if failures:
+            search_record["failures"] = failures
+        if retry_context:
+            search_record["retry_of"] = retry_context
+
+        config.setdefault("searches", []).append(search_record)
+        config["next_source_id"] = index["next_id"]
+        coordinator.commit(
+            config=config,
+            index=index,
+            source_files=source_files,
+            transaction_label="search_web",
+        )
 
     result = {
         "sources_added": len(added_ids),
-        "sources_skipped": skipped,
+        "sources_updated": len(updated_ids),
+        "sources_skipped": len(duplicate_matches),
         "source_ids": added_ids,
+        "updated_source_ids": updated_ids,
+        "duplicate_matches": duplicate_matches,
         "workspace": str(workspace),
         "query": query,
     }
-    if errors:
-        result["sources_failed"] = len(errors)
-        result["errors"] = errors
+    if failures:
+        result["sources_failed"] = len(failures)
+        result["errors"] = failures
     return result
 
 
@@ -516,20 +744,23 @@ def main(argv: list[str] | None = None) -> int:
         description="Search the web and scrape results into a workspace.",
         prog="search_web",
     )
-    parser.add_argument("query", help="Search query string.")
+    parser.add_argument("query", nargs="?", help="Search query string.")
     parser.add_argument("--workspace", required=True, help="Path to the workspace directory.")
     parser.add_argument("--max-results", type=int, default=10, help="Maximum search results to fetch (default: 10).")
     parser.add_argument("--search-provider", default=None, help="Search provider name (default: from config).")
     parser.add_argument("--scrape-provider", default=None, help="Scrape provider name (default: from config).")
     parser.add_argument("--no-scrape", action="store_true", help="Skip scraping; save URL + snippet only.")
+    parser.add_argument("--retry-failed", action="store_true", help="Retry only the failed URLs from the latest web-search record in this workspace.")
     parser.add_argument("--truncate", type=int, default=10000, help="Truncate sources to N words (0=no limit, default: 10000).")
     parser.add_argument("--use-cache", action="store_true", help="Use cached search results if present (for golden runs).")
     parser.add_argument("--clear-cache", action="store_true", help="Delete cached search results before running.")
     parser.add_argument("--cache-dir", default=None, help="Cache directory (default: <workspace>/.calixto/cache).")
     args = parser.parse_args(argv)
 
-    if not args.query or not args.query.strip():
+    if not args.retry_failed and (not args.query or not args.query.strip()):
         emit_error("invalid_query", "query must be a non-empty string")
+    if args.retry_failed and args.no_scrape:
+        emit_error("invalid_retry_mode", "--retry-failed requires scraping to be enabled")
 
     workspace = workspace_path(args.workspace)
     cache_dir = Path(args.cache_dir).resolve() if args.cache_dir else default_cache_dir(workspace)
@@ -539,7 +770,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = run_search(
-            query=args.query.strip(),
+            query=args.query.strip() if args.query else None,
             workspace=workspace,
             max_results=args.max_results,
             search_provider_name=args.search_provider,
@@ -549,13 +780,14 @@ def main(argv: list[str] | None = None) -> int:
             use_cache=args.use_cache,
             clear_cache_first=args.clear_cache,
             cache_dir=cache_dir,
+            retry_failed=args.retry_failed,
         )
     except SystemExit:
         raise
     except Exception as e:
         emit_error("search_failed", f"unexpected error: {e}")
 
-    if result.get("sources_failed", 0) > 0 and result.get("sources_added", 0) > 0:
+    if result.get("sources_failed", 0) > 0:
         emit_partial(result)
     else:
         emit_ok(result)

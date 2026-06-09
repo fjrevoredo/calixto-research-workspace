@@ -9,6 +9,7 @@ This module provides:
 - `save_workspace_config`: atomic write of a workspace's config.json
 - `load_source_index`: load and validate a workspace's sources/index.json
 - `save_source_index`: atomic write of a workspace's sources/index.json
+- `WorkspaceStateCoordinator`: lock, recover, validate, and commit multi-file search state mutations
 - `normalize_url`: strip protocol, www, trailing slashes, tracking params for dedup
 - `parse_frontmatter`: extract YAML frontmatter from a markdown file
 - `slugify`: convert a string to a valid workspace name slug
@@ -22,9 +23,13 @@ See requirements.md section 12.4 for the error output format.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import socket
 import sys
 import tempfile
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +37,12 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import yaml
+
+
+LOCK_STALE_AFTER_SECONDS = 120.0
+LOCK_ACQUIRE_TIMEOUT_SECONDS = 30.0
+LOCK_POLL_INTERVAL_SECONDS = 0.1
+SOURCE_ID_RE = re.compile(r"^src_(\d{3,})$")
 
 
 # ---------------------------------------------------------------------------
@@ -130,8 +141,323 @@ def save_source_index(workspace: Path, index: dict[str, Any]) -> None:
     _atomic_write_json(index_path, index)
 
 
+def workspace_state_dir(workspace: Path) -> Path:
+    """Return the per-workspace hidden state directory."""
+    return workspace / ".calixto"
+
+
+def workspace_transactions_dir(workspace: Path) -> Path:
+    """Return the directory used for staged workspace transactions."""
+    return workspace_state_dir(workspace) / "transactions"
+
+
+def workspace_lock_dir(workspace: Path) -> Path:
+    """Return the directory used as an inter-process workspace lock."""
+    return workspace_state_dir(workspace) / "workspace.lock"
+
+
+class WorkspaceLock:
+    """Filesystem-backed lock that serializes workspace mutations.
+
+    The lock is a directory created with mkdir, which is atomic across
+    supported platforms. A stale lock is broken after `stale_after_seconds`.
+    """
+
+    def __init__(
+        self,
+        workspace: Path,
+        *,
+        acquire_timeout_seconds: float = LOCK_ACQUIRE_TIMEOUT_SECONDS,
+        stale_after_seconds: float = LOCK_STALE_AFTER_SECONDS,
+        poll_interval_seconds: float = LOCK_POLL_INTERVAL_SECONDS,
+    ) -> None:
+        self.workspace = workspace
+        self.acquire_timeout_seconds = acquire_timeout_seconds
+        self.stale_after_seconds = stale_after_seconds
+        self.poll_interval_seconds = poll_interval_seconds
+        self.lock_dir = workspace_lock_dir(workspace)
+        self.info_path = self.lock_dir / "lock.json"
+        self._acquired = False
+
+    def __enter__(self) -> "WorkspaceLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.release()
+
+    def acquire(self) -> None:
+        """Acquire the workspace lock or raise TimeoutError."""
+        workspace_state_dir(self.workspace).mkdir(parents=True, exist_ok=True)
+        started = time.monotonic()
+        while True:
+            try:
+                self.lock_dir.mkdir()
+                self._write_info()
+                self._acquired = True
+                return
+            except FileExistsError:
+                if self._break_stale_lock():
+                    continue
+                if (time.monotonic() - started) >= self.acquire_timeout_seconds:
+                    raise TimeoutError(
+                        f"timed out waiting for workspace lock at {self.lock_dir}"
+                    )
+                time.sleep(self.poll_interval_seconds)
+
+    def release(self) -> None:
+        """Release the lock if held."""
+        if not self._acquired:
+            return
+        shutil.rmtree(self.lock_dir, ignore_errors=True)
+        self._acquired = False
+
+    def _write_info(self) -> None:
+        payload = {
+            "pid": os.getpid(),
+            "hostname": socket.gethostname(),
+            "created_at": _now_iso(),
+        }
+        _atomic_write_json(self.info_path, payload)
+        try:
+            os.utime(self.lock_dir, None)
+        except OSError:
+            pass
+
+    def _break_stale_lock(self) -> bool:
+        try:
+            age_seconds = time.time() - self.lock_dir.stat().st_mtime
+        except OSError:
+            return False
+        if age_seconds < self.stale_after_seconds:
+            return False
+        try:
+            shutil.rmtree(self.lock_dir)
+        except FileNotFoundError:
+            return True
+        except OSError:
+            return False
+        return True
+
+
+class WorkspaceStateCoordinator:
+    """Serialize multi-file workspace mutations and recover interrupted ones."""
+
+    def __init__(self, workspace: Path) -> None:
+        self.workspace = workspace
+        self.lock = WorkspaceLock(workspace)
+        self.config: dict[str, Any] = {}
+        self.index: dict[str, Any] = {}
+        self.recovery: dict[str, Any] = {"recovered": [], "discarded": []}
+
+    def __enter__(self) -> "WorkspaceStateCoordinator":
+        self.lock.acquire()
+        self.recovery = recover_workspace_transactions_locked(self.workspace)
+        self.reload()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.lock.release()
+
+    def reload(self) -> None:
+        """Reload config/index after the lock is held."""
+        self.config = load_workspace_config(self.workspace)
+        self.index = load_source_index(self.workspace)
+
+    def commit(
+        self,
+        *,
+        config: dict[str, Any],
+        index: dict[str, Any],
+        source_files: list[dict[str, str]],
+        transaction_label: str,
+    ) -> dict[str, Any]:
+        """Commit source files, sources/index.json, and config.json together.
+
+        `source_files` entries must contain:
+        - `relpath`: workspace-relative file path such as `sources/web/src_001.md`
+        - `content`: full text to publish
+        """
+        prepared_config = dict(config)
+        prepared_index = dict(index)
+        prepared_config["updated_at"] = _now_iso()
+        validate_workspace_search_state(prepared_config, prepared_index)
+
+        txid = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+        txdir = workspace_transactions_dir(self.workspace) / txid
+        stage_root = txdir / "staged"
+        txdir.mkdir(parents=True, exist_ok=False)
+        try:
+            staged_files: list[str] = []
+            for item in source_files:
+                relpath = item["relpath"]
+                content = item["content"]
+                _atomic_write_text(stage_root / relpath, content)
+                staged_files.append(relpath.replace("\\", "/"))
+
+            _atomic_write_text(
+                stage_root / "sources" / "index.json",
+                json.dumps(prepared_index, indent=2, ensure_ascii=False),
+            )
+            staged_files.append("sources/index.json")
+            _atomic_write_text(
+                stage_root / "config.json",
+                json.dumps(prepared_config, indent=2, ensure_ascii=False),
+            )
+            staged_files.append("config.json")
+
+            manifest = {
+                "version": 1,
+                "transaction_id": txid,
+                "transaction_label": transaction_label,
+                "created_at": _now_iso(),
+                "files": sorted(staged_files),
+            }
+            _atomic_write_json(txdir / "manifest.json", manifest)
+            _publish_workspace_transaction(self.workspace, txdir, manifest)
+            shutil.rmtree(txdir, ignore_errors=True)
+            self.config = prepared_config
+            self.index = prepared_index
+            return manifest
+        except Exception:
+            # Keep the staged transaction on disk once the manifest exists so a
+            # future search or audit can recover it deterministically.
+            if not (txdir / "manifest.json").exists():
+                shutil.rmtree(txdir, ignore_errors=True)
+            raise
+
+
+def recover_workspace_transactions(workspace: Path) -> dict[str, Any]:
+    """Recover or discard staged workspace transactions under an exclusive lock."""
+    with WorkspaceLock(workspace):
+        return recover_workspace_transactions_locked(workspace)
+
+
+def recover_workspace_transactions_locked(workspace: Path) -> dict[str, Any]:
+    """Recover staged workspace transactions while the caller holds the lock."""
+    tx_root = workspace_transactions_dir(workspace)
+    if not tx_root.exists():
+        return {"recovered": [], "discarded": []}
+
+    recovered: list[str] = []
+    discarded: list[str] = []
+    for txdir in sorted(p for p in tx_root.iterdir() if p.is_dir()):
+        manifest_path = txdir / "manifest.json"
+        if not manifest_path.exists():
+            shutil.rmtree(txdir, ignore_errors=True)
+            discarded.append(txdir.name)
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            raise RuntimeError(f"cannot recover transaction {txdir.name}: invalid manifest ({exc})") from exc
+        _publish_workspace_transaction(workspace, txdir, manifest)
+        shutil.rmtree(txdir, ignore_errors=True)
+        recovered.append(txdir.name)
+
+    return {"recovered": recovered, "discarded": discarded}
+
+
+def validate_workspace_search_state(config: dict[str, Any], index: dict[str, Any]) -> None:
+    """Raise ValueError if staged search state is internally inconsistent."""
+    if not isinstance(config, dict):
+        raise ValueError("config must be a JSON object")
+    if not isinstance(index, dict):
+        raise ValueError("index must be a JSON object")
+
+    sources = index.get("sources", [])
+    if not isinstance(sources, list):
+        raise ValueError("index.sources must be a list")
+
+    seen_ids: set[str] = set()
+    seen_files: set[str] = set()
+    max_numeric_id = 0
+    for pos, source in enumerate(sources):
+        if not isinstance(source, dict):
+            raise ValueError(f"index.sources[{pos}] must be an object")
+        source_id = str(source.get("id", "")).strip()
+        url = str(source.get("url", "")).strip()
+        file_relpath = str(source.get("file", "")).strip()
+        if not source_id or not SOURCE_ID_RE.match(source_id):
+            raise ValueError(f"index.sources[{pos}].id must look like src_NNN")
+        if not url:
+            raise ValueError(f"index.sources[{pos}].url must be non-empty")
+        if not file_relpath:
+            raise ValueError(f"index.sources[{pos}].file must be non-empty")
+        if source_id in seen_ids:
+            raise ValueError(f"duplicate source id in index: {source_id}")
+        if file_relpath in seen_files:
+            raise ValueError(f"duplicate source file path in index: {file_relpath}")
+        seen_ids.add(source_id)
+        seen_files.add(file_relpath)
+        max_numeric_id = max(max_numeric_id, int(source_id.split("_", 1)[1]))
+
+    next_id = index.get("next_id", 1)
+    if not isinstance(next_id, int) or next_id < 1:
+        raise ValueError("index.next_id must be a positive integer")
+    expected_next_id = max_numeric_id + 1 if seen_ids else 1
+    if next_id != expected_next_id:
+        raise ValueError(
+            f"index.next_id must equal the next available source id ({expected_next_id}), got {next_id}"
+        )
+
+    config_next_source_id = config.get("next_source_id", 1)
+    if not isinstance(config_next_source_id, int) or config_next_source_id < 1:
+        raise ValueError("config.next_source_id must be a positive integer")
+    if config_next_source_id != next_id:
+        raise ValueError(
+            f"config.next_source_id ({config_next_source_id}) must match index.next_id ({next_id})"
+        )
+
+    searches = config.get("searches", [])
+    if not isinstance(searches, list):
+        raise ValueError("config.searches must be a list")
+    for pos, search in enumerate(searches):
+        if not isinstance(search, dict):
+            raise ValueError(f"config.searches[{pos}] must be an object")
+        if not str(search.get("query", "")).strip():
+            raise ValueError(f"config.searches[{pos}].query must be non-empty")
+        if not str(search.get("provider", "")).strip():
+            raise ValueError(f"config.searches[{pos}].provider must be non-empty")
+        if not str(search.get("timestamp", "")).strip():
+            raise ValueError(f"config.searches[{pos}].timestamp must be non-empty")
+        source_ids = search.get("source_ids", [])
+        if source_ids is None:
+            source_ids = []
+        if not isinstance(source_ids, list):
+            raise ValueError(f"config.searches[{pos}].source_ids must be a list when present")
+        unknown_ids = [source_id for source_id in source_ids if source_id not in seen_ids]
+        if unknown_ids:
+            raise ValueError(
+                f"config.searches[{pos}] references source_ids not present in index: {unknown_ids}"
+            )
+
+
+def _publish_workspace_transaction(workspace: Path, txdir: Path, manifest: dict[str, Any]) -> None:
+    """Publish a staged transaction into the live workspace."""
+    stage_root = txdir / "staged"
+    staged_files = manifest.get("files", [])
+    if not isinstance(staged_files, list) or not staged_files:
+        raise RuntimeError(f"cannot recover transaction {txdir.name}: manifest has no files")
+    for relpath in staged_files:
+        source = stage_root / relpath
+        if not source.exists():
+            raise RuntimeError(
+                f"cannot recover transaction {txdir.name}: missing staged file {relpath}"
+            )
+        _atomic_write_text(
+            workspace / relpath,
+            source.read_text(encoding="utf-8"),
+        )
+
+
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     """Write JSON to path atomically (temp file + rename)."""
+    _atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False))
+
+
+def _atomic_write_text(path: Path, text: str) -> None:
+    """Write text to path atomically (temp file + rename)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     suffix = f".{uuid.uuid4().hex}.tmp"
     with tempfile.NamedTemporaryFile(
@@ -142,7 +468,7 @@ def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
         prefix=path.name + ".",
         suffix=suffix,
     ) as tmp:
-        json.dump(payload, tmp, indent=2, ensure_ascii=False)
+        tmp.write(text)
         tmp_path = Path(tmp.name)
     try:
         tmp_path.replace(path)
@@ -293,6 +619,14 @@ def slugify(text: str) -> str:
 def source_id_for(next_id: int) -> str:
     """Format a numeric ID as the standard src_NNN form."""
     return f"src_{next_id:03d}"
+
+
+def source_number_for(source_id: str) -> int:
+    """Return the numeric portion of a src_NNN identifier."""
+    match = SOURCE_ID_RE.match(source_id)
+    if not match:
+        raise ValueError(f"invalid source id: {source_id}")
+    return int(match.group(1))
 
 
 def word_count(text: str) -> int:

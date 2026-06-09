@@ -40,6 +40,16 @@ installs Playwright Chromium for live web scraping.
 2. Set or refine the question in `config.json`.
 3. Run workspace-local scripts from this directory.
 
+Search discipline matters:
+
+- Run search commands sequentially, not as parallel tool calls in one agent message.
+- After each search batch, inspect `config.json` search count via `workspace_info.py show .`
+  and run `workspace_info.py audit .`.
+- Use only bare `src_NNN` citations in findings and reports, never file paths such as
+  `papers/src_001`.
+- Keep `next_finding_id` and `next_insight_id` in `config.json` aligned with the
+  highest IDs present in `notes/findings.md` and `notes/summary.md`.
+
 Recommended command style:
 
 ```bash

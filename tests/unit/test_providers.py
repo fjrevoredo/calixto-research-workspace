@@ -21,6 +21,10 @@ from providers.scrape.base import (  # noqa: E402
     ScrapeProvider,
     ScrapeResult,
 )
+from providers.scrape.crawl4ai_provider import (  # noqa: E402
+    _crawl_result_to_scrape_result,
+    _postprocess_markdown,
+)
 from providers.search.base import (  # noqa: E402
     SearchError,
     SearchProvider,
@@ -208,3 +212,40 @@ class TestScrapeProviderContract:
         result = S().scrape("https://x.com")
         assert result.markdown == "hello world"
         assert result.word_count == 2
+
+
+class TestCrawl4AIPostProcessing:
+    def test_postprocess_removes_boilerplate_lines(self) -> None:
+        markdown, metadata = _postprocess_markdown(
+            "https://github.com/example/repo",
+            "Skip to content\n\n# README\n\nUseful content here.\n",
+            {"provider": "crawl4ai"},
+        )
+        assert "Skip to content" not in markdown
+        assert markdown.startswith("# README")
+        assert metadata["extraction_strategy"] == "crawl4ai_plus_cleanup"
+        assert metadata["boilerplate_lines_removed"] >= 1
+
+    def test_postprocess_marks_ui_heavy_pages_as_low_signal(self) -> None:
+        markdown, metadata = _postprocess_markdown(
+            "https://www.youtube.com/watch?v=123",
+            "Watch on YouTube\n\nSign in to continue\n\nShort page\n",
+            {"provider": "crawl4ai"},
+        )
+        assert metadata["low_signal"] is True
+        assert metadata["content_quality"] == "low_signal"
+        assert "youtube_page" in metadata["low_signal_reasons"]
+
+    def test_crawl_result_conversion_applies_quality_metadata(self) -> None:
+        class _FakeResult:
+            success = True
+            error_message = ""
+            markdown = "# Heading\n\nUseful body\n"
+            markdown_v2 = None
+            meta = {"title": "Sample"}
+            title = "Sample"
+
+        converted = _crawl_result_to_scrape_result("https://example.com/page", _FakeResult())
+        assert converted.title == "Sample"
+        assert converted.metadata["content_quality"] == "normal"
+        assert converted.metadata["low_signal"] is False
