@@ -21,7 +21,6 @@ from tests.unit.installer_test_support import (
     invoke_unix_installer,
     install_toolkit_tree,
     make_remote_git_repo,
-    path_without_git,
     serve_archive_https,
     stage_archive_root,
     build_archive,
@@ -212,7 +211,6 @@ def test_archive_fallback_accepts_repository_agnostic_root_names(
         target = tmp_path / f"target-{archive_root}"
         target.mkdir()
         env = base_env()
-        env["PATH"] = path_without_git(env.get("PATH", ""))
         env["CALIXTO_REPO_URL"] = repo_url
         env["CALIXTO_TEST_ARCHIVE_URL"] = archive_url
         env["CALIXTO_TEST_CA_CERT"] = cert_path
@@ -272,7 +270,6 @@ def test_invalid_archives_fail_before_target_mutation(
         target = tmp_path / f"target-{archive_builder}"
         target.mkdir()
         env = base_env()
-        env["PATH"] = path_without_git(env.get("PATH", ""))
         env["CALIXTO_REPO_URL"] = "https://github.com/fake-org/fake-repo.git"
         env["CALIXTO_TEST_ARCHIVE_URL"] = archive_url
         env["CALIXTO_TEST_CA_CERT"] = cert_path

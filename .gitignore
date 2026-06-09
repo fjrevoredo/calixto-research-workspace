@@ -29,15 +29,16 @@ uv.lock
 # plug-in extension) does not require editing .gitignore to make
 # its cache files trackable. Non-JSON artifacts in the cache
 # directory (e.g. a stray .tmp, a future test fixture) are
-# ignored.
+# ignored recursively.
 #
 # Historical note: an earlier version of this rule used a
 # per-provider allow-list (e.g. `!tests/golden/cache/duckduckgo/`).
 # That approach made a new provider's cache silently untrackable
 # until someone edited .gitignore, which violated the
 # reproducibility contract.
-tests/golden/cache/*.tmp
-tests/golden/cache/**/*.tmp
+tests/golden/cache/**
+!tests/golden/cache/**/
+!tests/golden/cache/**/*.json
 tests/golden/runs/
 
 # OS files
