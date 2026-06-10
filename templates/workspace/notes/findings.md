@@ -5,20 +5,21 @@ Extracted facts with finding IDs. Each finding MUST reference at least one sourc
 ## Format
 
 ```markdown
-## FND_ID
-**Source:** SRC_ID
+## fnd_<NNN>
+**Source:** src_<NNN>
 **Fact:** The fact statement goes here.
 **Quote:** "Optional direct quote from the source."
 **Confidence:** high|medium|low
 ```
 
-Replace FND_ID with the next finding number, padded to 3 digits (e.g. `fnd001`). Replace SRC_ID with a source ID like `src001`.
+Replace `<NNN>` with the next three-digit number from the workspace counter.
+Use only the canonical underscore form for findings and sources.
 
 Multiple sources can be cited by comma-separating the IDs:
 
 ```markdown
-## FND_ID
-**Source:** SRC_ID, SRC_ID
+## fnd_<NNN>
+**Source:** src_<NNN>, src_<NNN>
 **Fact:** ...
 **Confidence:** medium
 ```
@@ -26,8 +27,8 @@ Multiple sources can be cited by comma-separating the IDs:
 ## Example
 
 ```markdown
-## fnd001
-**Source:** src001
+## fnd_<NNN>
+**Source:** src_<NNN>
 **Fact:** Python 3.11 added asyncio.TaskGroup for structured concurrency.
 **Quote:** "TaskGroup provides a clean way to run tasks as a unit."
 **Confidence:** high

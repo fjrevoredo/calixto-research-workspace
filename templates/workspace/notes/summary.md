@@ -5,19 +5,20 @@ Synthesized insights with insight IDs. Each insight MUST reference at least one 
 ## Format
 
 ```markdown
-## INS_ID
-**Based on:** FND_ID, FND_ID
+## ins_<NNN>
+**Based on:** fnd_<NNN>, fnd_<NNN>
 **Insight:** The synthesized conclusion goes here.
 ```
 
-Replace INS_ID with the next insight number, padded to 3 digits (e.g. `ins001`). Replace FND_ID with a finding ID like `fnd001`.
+Replace `<NNN>` with the next three-digit number from the workspace counter.
+Use only the canonical underscore form for insight and finding IDs.
 
 Insights connect findings into higher-level claims. They are the bridge between raw extracted facts and the final report.
 
 ## Example
 
 ```markdown
-## ins001
-**Based on:** fnd001, fnd002
+## ins_<NNN>
+**Based on:** fnd_<NNN>, fnd_<NNN>
 **Insight:** Structured concurrency simplifies error handling across many concurrent operations.
 ```

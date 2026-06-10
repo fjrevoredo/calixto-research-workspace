@@ -12,6 +12,8 @@ metadata:
 # Deep Research
 
 Use this workflow from the root of a standalone workspace.
+Read this file directly from `skills/deep-research/SKILL.md`. Generic skill
+loaders may not discover workspace-local skills.
 
 ## Goal
 
@@ -87,12 +89,22 @@ uv run python scripts/workspace_info.py audit .
 
 Confirm the search count increased as expected before moving on.
 
-### Step 3: Read and evaluate sources
+### Step 3: Triage, read, and evaluate sources
 
-Read the saved source markdown in `sources/web/` and `sources/papers/`.
+Start with `sources/index.json` or `workspace_info.py show .` before opening a
+large batch of files.
 
-Discard low-quality sources. Keep a short reason in your notes when a source is
-irrelevant, weak, or redundant.
+Prioritize sources that are not marked `low_signal`, `snippet_only`, or `error`.
+Treat those low-signal markers as a triage hint, not an automatic ban.
+
+When a source is irrelevant, weak, redundant, or only useful for context, mark
+it explicitly:
+
+```bash
+uv run python scripts/workspace_info.py review-source . src_NNN discarded --note "short reason"
+```
+
+Record open questions and follow-up searches in `notes/gaps.md` as you go.
 
 ### Step 4: Extract findings
 
@@ -113,6 +125,14 @@ Use only bare `src_NNN` identifiers. Do not cite file paths such as
 After you append findings, update `config.json` so `next_finding_id` remains
 one higher than the highest finding ID present in `notes/findings.md`.
 
+Run an audit immediately after writing findings. If the audit reports counter
+drift, sync the counters before continuing:
+
+```bash
+uv run python scripts/workspace_info.py audit .
+uv run python scripts/workspace_info.py sync-counters .
+```
+
 ### Step 5: Synthesize insights
 
 Append to `notes/summary.md`:
@@ -128,6 +148,9 @@ Every insight must cite at least one `fnd_NNN`.
 After you append insights, update `config.json` so `next_insight_id` remains
 one higher than the highest insight ID present in `notes/summary.md`.
 
+Run the audit again after writing insights. If the audit reports counter drift,
+run `workspace_info.py sync-counters .` before moving on.
+
 ### Step 6: Write the report
 
 Write `outputs/report.md` and cite sources inline as `[src_NNN]`.
@@ -136,6 +159,9 @@ source reference.
 
 Keep claims proportional to the evidence quality. If evidence conflicts, say so
 explicitly instead of smoothing it over.
+
+Populate `outputs/bibliography.md` with human-readable source quality notes
+before handoff.
 
 ### Step 7: Audit the workspace
 

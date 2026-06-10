@@ -25,6 +25,7 @@ from providers.scrape.crawl4ai_provider import (  # noqa: E402
     _crawl_result_to_scrape_result,
     _postprocess_markdown,
 )
+from providers.search.duckduckgo import DuckDuckGoProvider  # noqa: E402
 from providers.search.base import (  # noqa: E402
     SearchError,
     SearchProvider,
@@ -249,3 +250,20 @@ class TestCrawl4AIPostProcessing:
         assert converted.title == "Sample"
         assert converted.metadata["content_quality"] == "normal"
         assert converted.metadata["low_signal"] is False
+
+
+class TestDuckDuckGoFiltering:
+    def test_search_filters_non_http_and_internal_redirect_urls(self) -> None:
+        provider = DuckDuckGoProvider()
+
+        class _FakeDDGS:
+            def text(self, query: str, max_results: int = 10):
+                return [
+                    {"href": "/clev?event=StartpageResultClick&id=1", "title": "Redirect", "body": "bad"},
+                    {"href": "mailto:test@example.com", "title": "Mail", "body": "bad"},
+                    {"href": "https://example.com/good", "title": "Good", "body": "useful"},
+                ]
+
+        provider._ddgs = _FakeDDGS()
+        results = provider.search("valid query", max_results=3)
+        assert [result.url for result in results] == ["https://example.com/good"]

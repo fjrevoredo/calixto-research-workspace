@@ -6,6 +6,8 @@ Subcommands:
     show    - Show summary of a single workspace
     delete  - Remove a workspace (with confirmation)
     audit   - Verify the traceability chain (src > fnd > ins > report)
+    sync-counters - Synchronize finding/insight counters from note contents
+    review-source - Update one source review status in sources/index.json
 
 All subcommands print structured JSON to stdout. Errors go to stderr.
 
@@ -14,6 +16,8 @@ Usage:
     python scripts/workspace_info.py show <name> [--path ./workspaces]
     python scripts/workspace_info.py delete <name> [--path ./workspaces] [--force]
     python scripts/workspace_info.py audit <name> [--path ./workspaces]
+    python scripts/workspace_info.py sync-counters <name> [--path ./workspaces]
+    python scripts/workspace_info.py review-source <name> <src_NNN> <pending|discarded|used> [--note TEXT] [--path ./workspaces]
 """
 
 from __future__ import annotations
@@ -35,11 +39,14 @@ for p in (str(_REPO_ROOT), str(_SCRIPTS_DIR)):
         sys.path.insert(0, p)
 
 from _common import (
+    REVIEW_STATUS_VALUES,
+    SOURCE_ID_RE,
     WorkspaceStateCoordinator,
     emit_error,
     emit_ok,
     is_valid_slug,
     parse_frontmatter,
+    utcnow_iso,
     workspace_path,
 )
 
@@ -53,6 +60,8 @@ PATH_QUALIFIED_SRC_RE = re.compile(r"\b(?:web|papers|code)/(src_(\d{3,}))\b")
 SRC_ID_RE = re.compile(r"(?<![A-Za-z0-9_/])(src_(\d{3,}))\b")
 FND_ID_RE = re.compile(r"\bfnd_(\d{3,})\b")
 INS_ID_RE = re.compile(r"\bins_(\d{3,})\b")
+MALFORMED_FND_ID_RE = re.compile(r"(?<![A-Za-z0-9_])(fnd\d{3,})\b")
+MALFORMED_INS_ID_RE = re.compile(r"(?<![A-Za-z0-9_])(ins\d{3,})\b")
 
 
 def _read_file(path: Path) -> str:
@@ -113,16 +122,92 @@ def _counter_drift(actual_next_id: Any, highest_seen: int) -> dict[str, Any]:
     }
 
 
+def _scope_limit_details(scope: Any, total_sources: int) -> dict[str, Any]:
+    """Describe whether the workspace exceeded its configured soft source limit."""
+    max_sources = None
+    if isinstance(scope, dict):
+        max_sources = scope.get("max_sources")
+    if not isinstance(max_sources, int) or max_sources < 1:
+        return {
+            "max_sources": None,
+            "total_sources": total_sources,
+            "exceeded": False,
+            "over_by": 0,
+        }
+    over_by = max(total_sources - max_sources, 0)
+    return {
+        "max_sources": max_sources,
+        "total_sources": total_sources,
+        "exceeded": over_by > 0,
+        "over_by": over_by,
+    }
+
+
+def _review_status_for_entry(entry: dict[str, Any]) -> str:
+    """Return the normalized review status for one source index entry."""
+    status = str(entry.get("review_status", "")).strip()
+    if status in REVIEW_STATUS_VALUES:
+        return status
+    return "pending"
+
+
+def _review_status_counts(entries: list[dict[str, Any]]) -> dict[str, int]:
+    """Count index entries by review status."""
+    counts = {status: 0 for status in sorted(REVIEW_STATUS_VALUES)}
+    for entry in entries:
+        counts[_review_status_for_entry(entry)] += 1
+    return counts
+
+
+def _is_low_signal_or_error(entry: dict[str, Any]) -> bool:
+    """Return True when an uncited source already carries a low-value signal."""
+    if entry.get("low_signal") is True:
+        return True
+    if str(entry.get("content_quality", "")).strip() == "low_signal":
+        return True
+    if entry.get("snippet_only") is True:
+        return True
+    return bool(str(entry.get("error", "")).strip())
+
+
+def _classify_orphaned_sources(
+    orphaned_ids: set[str],
+    index_entries_by_id: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[str]]:
+    """Bucket uncited sources into actionable review categories."""
+    buckets = {
+        "pending": [],
+        "discarded": [],
+        "low_signal_or_error": [],
+        "used_but_uncited": [],
+    }
+    for source_id in sorted(orphaned_ids):
+        entries = index_entries_by_id.get(source_id, [])
+        entry = entries[0] if entries else {}
+        status = _review_status_for_entry(entry)
+        if status == "discarded":
+            buckets["discarded"].append(source_id)
+        elif status == "used":
+            buckets["used_but_uncited"].append(source_id)
+        elif _is_low_signal_or_error(entry):
+            buckets["low_signal_or_error"].append(source_id)
+        else:
+            buckets["pending"].append(source_id)
+    return buckets
+
+
 def _build_summary(
     *,
     status: str,
     invalid_reference_count: int,
     malformed_reference_count: int,
+    malformed_identifier_count: int,
     unindexed_files: int,
     missing_index_files: int,
     duplicate_ids: int,
     counter_drift_count: int,
     orphaned_sources: int,
+    scope_overrun_count: int,
 ) -> str:
     """Build a concise human-readable audit summary."""
     if status == "ok":
@@ -133,6 +218,8 @@ def _build_summary(
         reasons.append(f"{invalid_reference_count} invalid reference(s)")
     if malformed_reference_count:
         reasons.append(f"{malformed_reference_count} malformed source citation(s)")
+    if malformed_identifier_count:
+        reasons.append(f"{malformed_identifier_count} malformed finding/insight id(s)")
     if unindexed_files:
         reasons.append(f"{unindexed_files} unindexed source file(s)")
     if missing_index_files:
@@ -141,6 +228,8 @@ def _build_summary(
         reasons.append(f"{duplicate_ids} duplicate on-disk source id(s)")
     if counter_drift_count:
         reasons.append(f"{counter_drift_count} counter drift issue(s)")
+    if scope_overrun_count:
+        reasons.append(f"{scope_overrun_count} source(s) above configured max_sources")
     if status == "warning" and orphaned_sources:
         reasons.append(f"{orphaned_sources} orphaned source(s)")
     prefix = "ERROR" if status == "error" else "WARNING"
@@ -328,17 +417,22 @@ def cmd_show(workspace: Path) -> dict:
         for relpath in indexed_files
         if relpath not in scanned["files_by_relpath"]
     )
+    total_sources = sum(indexed_counts.values())
+    scope_limits = _scope_limit_details(cfg.get("scope", {}), total_sources)
+    review_counts = _review_status_counts(idx.get("sources", []))
 
     return {
         "workspace": str(workspace),
         "name": cfg.get("name", workspace.name),
         "question": cfg.get("question", ""),
         "scope": cfg.get("scope", {}),
+        "scope_limits": scope_limits,
         "providers": cfg.get("providers", {}),
         "source_counts": indexed_counts,
-        "total_sources": sum(indexed_counts.values()),
+        "total_sources": total_sources,
         "source_file_counts": file_counts,
         "source_file_count": sum(file_counts.values()),
+        "source_review_counts": review_counts,
         "search_count": len(cfg.get("searches", [])),
         "next_source_id": cfg.get("next_source_id", 1),
         "next_finding_id": cfg.get("next_finding_id", 1),
@@ -355,6 +449,131 @@ def cmd_show(workspace: Path) -> dict:
             "recovered_transactions": recovery.get("recovered", []),
             "discarded_staged_transactions": recovery.get("discarded", []),
         },
+    }
+
+
+def cmd_sync_counters(workspace: Path) -> dict:
+    """Synchronize finding/insight counters in config.json from note contents."""
+    if not (workspace / "config.json").exists():
+        emit_error("workspace_not_found", f"workspace not found at {workspace}")
+    try:
+        with WorkspaceStateCoordinator(workspace) as coordinator:
+            cfg = coordinator.config
+            idx = coordinator.index
+            recovery = coordinator.recovery
+            findings_text = _read_file(workspace / "notes" / "findings.md")
+            summary_text = _read_file(workspace / "notes" / "summary.md")
+            finding_expected = _highest_numbered_id(findings_text, FND_ID_RE) + 1
+            insight_expected = _highest_numbered_id(summary_text, INS_ID_RE) + 1
+            old_finding = cfg.get("next_finding_id", 1)
+            old_insight = cfg.get("next_insight_id", 1)
+            changed = (
+                old_finding != finding_expected
+                or old_insight != insight_expected
+            )
+            if changed:
+                cfg["next_finding_id"] = finding_expected
+                cfg["next_insight_id"] = insight_expected
+                coordinator.commit(
+                    config=cfg,
+                    index=idx,
+                    source_files=[],
+                    transaction_label="sync_counters",
+                )
+    except (json.JSONDecodeError, OSError) as e:
+        emit_error("workspace_corrupt", f"could not read workspace metadata: {e}")
+
+    return {
+        "workspace": str(workspace),
+        "changed": changed,
+        "counters": {
+            "next_finding_id": {
+                "old": old_finding,
+                "new": finding_expected,
+                "changed": old_finding != finding_expected,
+            },
+            "next_insight_id": {
+                "old": old_insight,
+                "new": insight_expected,
+                "changed": old_insight != insight_expected,
+            },
+        },
+        "recovered_transactions": recovery.get("recovered", []),
+        "discarded_staged_transactions": recovery.get("discarded", []),
+    }
+
+
+def cmd_review_source(workspace: Path, source_id: str, review_status: str, note: str | None) -> dict:
+    """Update one source's review metadata in sources/index.json."""
+    if not (workspace / "config.json").exists():
+        emit_error("workspace_not_found", f"workspace not found at {workspace}")
+    source_id = source_id.strip()
+    if not SOURCE_ID_RE.match(source_id):
+        emit_error("invalid_source_id", f"source id must look like src_NNN, got: {source_id!r}")
+    if review_status not in REVIEW_STATUS_VALUES:
+        emit_error(
+            "invalid_review_status",
+            f"review status must be one of {sorted(REVIEW_STATUS_VALUES)}, got: {review_status!r}",
+        )
+    normalized_note = note.strip() if isinstance(note, str) else None
+    if normalized_note == "":
+        normalized_note = None
+
+    try:
+        with WorkspaceStateCoordinator(workspace) as coordinator:
+            cfg = coordinator.config
+            idx = coordinator.index
+            recovery = coordinator.recovery
+            matches = [
+                entry
+                for entry in idx.get("sources", [])
+                if str(entry.get("id", "")).strip() == source_id
+            ]
+            if not matches:
+                emit_error("source_not_found", f"source not found in index: {source_id}")
+            if len(matches) > 1:
+                emit_error(
+                    "workspace_corrupt",
+                    f"source id {source_id} appears multiple times in sources/index.json",
+                )
+            entry = matches[0]
+            old_entry = dict(entry)
+            entry["review_status"] = review_status
+            if review_status == "pending":
+                entry.pop("reviewed_at", None)
+                if normalized_note is None:
+                    entry.pop("review_note", None)
+            else:
+                entry["reviewed_at"] = utcnow_iso()
+            if normalized_note is None:
+                if review_status != "pending":
+                    entry.pop("review_note", None)
+            else:
+                entry["review_note"] = normalized_note
+            changed = entry != old_entry
+            if changed:
+                coordinator.commit(
+                    config=cfg,
+                    index=idx,
+                    source_files=[],
+                    transaction_label="review_source",
+                )
+    except (json.JSONDecodeError, OSError) as e:
+        emit_error("workspace_corrupt", f"could not read workspace metadata: {e}")
+
+    return {
+        "workspace": str(workspace),
+        "source_id": source_id,
+        "changed": changed,
+        "source": {
+            "id": str(entry.get("id", "")).strip(),
+            "file": str(entry.get("file", "")).strip(),
+            "review_status": str(entry.get("review_status", "")).strip(),
+            "review_note": entry.get("review_note"),
+            "reviewed_at": entry.get("reviewed_at"),
+        },
+        "recovered_transactions": recovery.get("recovered", []),
+        "discarded_staged_transactions": recovery.get("discarded", []),
     }
 
 
@@ -486,21 +705,40 @@ def cmd_audit(workspace: Path) -> dict:
         malformed_findings_refs.extend(malformed)
 
     summary_fnd_refs: set[str] = set()
+    malformed_summary_fnd_refs: list[str] = []
     for match in re.finditer(r"\*\*Based on:\*\*\s*([^\n]+)", summary_text):
+        malformed_summary_fnd_refs.extend(
+            malformed.group(1)
+            for malformed in MALFORMED_FND_ID_RE.finditer(match.group(1))
+        )
         for fid in FND_ID_RE.findall(match.group(1)):
             summary_fnd_refs.add(f"fnd_{fid}")
 
     report_src_refs, malformed_report_refs = _collect_source_references(report_text)
+    malformed_finding_ids = sorted(
+        {
+            match.group(1)
+            for match in re.finditer(r"^##\s+(fnd\d{3,})\b", findings_text, re.MULTILINE)
+        }
+    )
+    malformed_insight_ids = sorted(
+        {
+            match.group(1)
+            for match in re.finditer(r"^##\s+(ins\d{3,})\b", summary_text, re.MULTILINE)
+        }
+    )
 
     invalid_src_in_findings = findings_src_refs - valid_source_ids
     invalid_fnd_in_summary = summary_fnd_refs - known_fnd_ids
     invalid_src_in_report = report_src_refs - valid_source_ids
     orphaned_src = known_src_ids - (findings_src_refs | report_src_refs)
+    orphaned_breakdown = _classify_orphaned_sources(orphaned_src, index_entries_by_id)
 
     highest_src = max((int(source_id.split("_", 1)[1]) for source_id in known_src_ids), default=0)
     source_counter = _counter_drift(idx.get("next_id", 1), highest_src)
     finding_counter = _counter_drift(cfg.get("next_finding_id", 1), _highest_numbered_id(findings_text, FND_ID_RE))
     insight_counter = _counter_drift(cfg.get("next_insight_id", 1), _highest_numbered_id(summary_text, INS_ID_RE))
+    scope_limits = _scope_limit_details(cfg.get("scope", {}), len(known_src_ids))
 
     invalid_reference_count = (
         len(invalid_src_in_findings)
@@ -508,6 +746,11 @@ def cmd_audit(workspace: Path) -> dict:
         + len(invalid_src_in_report)
     )
     malformed_reference_count = len(set(malformed_findings_refs)) + len(set(malformed_report_refs))
+    malformed_identifier_count = (
+        len(malformed_finding_ids)
+        + len(malformed_insight_ids)
+        + len(set(malformed_summary_fnd_refs))
+    )
     counter_drift_count = sum(
         not counter["valid"]
         for counter in (source_counter, finding_counter, insight_counter)
@@ -515,6 +758,7 @@ def cmd_audit(workspace: Path) -> dict:
     hard_failure_count = (
         invalid_reference_count
         + malformed_reference_count
+        + malformed_identifier_count
         + len(unindexed_files)
         + len(missing_index_files)
         + len(scanned["duplicate_ids"])
@@ -524,10 +768,14 @@ def cmd_audit(workspace: Path) -> dict:
     )
     if hard_failure_count:
         status = "error"
-    elif orphaned_src:
+    elif orphaned_src or scope_limits["exceeded"]:
         status = "warning"
     else:
         status = "ok"
+
+    remediation: dict[str, Any] = {}
+    if not finding_counter["valid"] or not insight_counter["valid"]:
+        remediation["sync_counters_command"] = f"python scripts/workspace_info.py sync-counters {workspace}"
 
     return {
         "workspace": str(workspace),
@@ -540,6 +788,9 @@ def cmd_audit(workspace: Path) -> dict:
         "sources_cited_in_report": len(report_src_refs),
         "findings_referenced_in_summary": len(summary_fnd_refs),
         "orphaned_sources": sorted(orphaned_src),
+        "orphaned_source_breakdown": orphaned_breakdown,
+        "source_review_counts": _review_status_counts(index_entries),
+        "scope_limits": scope_limits,
         "filesystem_index_mismatches": {
             "unindexed_files": unindexed_files,
             "missing_index_files": missing_index_files,
@@ -558,6 +809,11 @@ def cmd_audit(workspace: Path) -> dict:
             "source_in_findings": sorted(set(malformed_findings_refs)),
             "source_in_report": sorted(set(malformed_report_refs)),
         },
+        "malformed_identifiers": {
+            "finding_ids": malformed_finding_ids,
+            "insight_ids": malformed_insight_ids,
+            "finding_in_summary": sorted(set(malformed_summary_fnd_refs)),
+        },
         "counters": {
             "source_index_next_id": source_counter,
             "next_finding_id": finding_counter,
@@ -566,17 +822,20 @@ def cmd_audit(workspace: Path) -> dict:
         "id_counter_valid": source_counter["valid"],
         "id_counter_expected": source_counter["expected"],
         "id_counter_actual": source_counter["actual"],
+        "remediation": remediation,
         "recovered_transactions": recovery.get("recovered", []),
         "discarded_staged_transactions": recovery.get("discarded", []),
         "summary": _build_summary(
             status=status,
             invalid_reference_count=invalid_reference_count,
             malformed_reference_count=malformed_reference_count,
+            malformed_identifier_count=malformed_identifier_count,
             unindexed_files=len(unindexed_files),
             missing_index_files=len(missing_index_files),
             duplicate_ids=len(scanned["duplicate_ids"]) + len(duplicate_index_ids),
             counter_drift_count=counter_drift_count,
             orphaned_sources=len(orphaned_src),
+            scope_overrun_count=scope_limits["over_by"],
         ),
     }
 
@@ -588,7 +847,7 @@ def cmd_audit(workspace: Path) -> dict:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="List, show, delete, or audit Calixto research workspaces.",
+        description="List, inspect, audit, and maintain Calixto research workspaces.",
         prog="workspace_info",
     )
     sub = p.add_subparsers(dest="command", required=True, metavar="COMMAND")
@@ -608,6 +867,17 @@ def build_parser() -> argparse.ArgumentParser:
     audit_p = sub.add_parser("audit", help="Verify traceability chain.")
     audit_p.add_argument("name", help="Workspace name or path.")
     audit_p.add_argument("--path", default="./workspaces", help="Parent directory (default: ./workspaces).")
+
+    sync_p = sub.add_parser("sync-counters", help="Synchronize finding/insight counters from note contents.")
+    sync_p.add_argument("name", help="Workspace name or path.")
+    sync_p.add_argument("--path", default="./workspaces", help="Parent directory (default: ./workspaces).")
+
+    review_p = sub.add_parser("review-source", help="Update one source review status in sources/index.json.")
+    review_p.add_argument("name", help="Workspace name or path.")
+    review_p.add_argument("source_id", help="Source id to update (src_NNN).")
+    review_p.add_argument("review_status", choices=sorted(REVIEW_STATUS_VALUES), help="New review status.")
+    review_p.add_argument("--note", default=None, help="Optional review note.")
+    review_p.add_argument("--path", default="./workspaces", help="Parent directory (default: ./workspaces).")
 
     return p
 
@@ -636,6 +906,20 @@ def main(argv: list[str] | None = None) -> int:
         parent = workspace_path(args.path)
         workspace = _resolve_workspace(args.name, parent)
         result = cmd_audit(workspace)
+        emit_ok(result)
+    elif args.command == "sync-counters":
+        parent = workspace_path(args.path)
+        workspace = _resolve_workspace(args.name, parent)
+        if not (workspace / "config.json").exists():
+            emit_error("workspace_not_found", f"workspace not found: {args.name} (looked in {parent})")
+        result = cmd_sync_counters(workspace)
+        emit_ok(result)
+    elif args.command == "review-source":
+        parent = workspace_path(args.path)
+        workspace = _resolve_workspace(args.name, parent)
+        if not (workspace / "config.json").exists():
+            emit_error("workspace_not_found", f"workspace not found: {args.name} (looked in {parent})")
+        result = cmd_review_source(workspace, args.source_id, args.review_status, args.note)
         emit_ok(result)
     else:
         emit_error("unknown_command", f"unknown command: {args.command}")

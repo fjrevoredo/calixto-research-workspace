@@ -43,6 +43,7 @@ LOCK_STALE_AFTER_SECONDS = 120.0
 LOCK_ACQUIRE_TIMEOUT_SECONDS = 30.0
 LOCK_POLL_INTERVAL_SECONDS = 0.1
 SOURCE_ID_RE = re.compile(r"^src_(\d{3,})$")
+REVIEW_STATUS_VALUES = {"pending", "discarded", "used"}
 
 
 # ---------------------------------------------------------------------------
@@ -388,6 +389,21 @@ def validate_workspace_search_state(config: dict[str, Any], index: dict[str, Any
             raise ValueError(f"duplicate source id in index: {source_id}")
         if file_relpath in seen_files:
             raise ValueError(f"duplicate source file path in index: {file_relpath}")
+        review_status = source.get("review_status")
+        if review_status is not None:
+            if not isinstance(review_status, str) or review_status not in REVIEW_STATUS_VALUES:
+                raise ValueError(
+                    f"index.sources[{pos}].review_status must be one of "
+                    f"{sorted(REVIEW_STATUS_VALUES)} when present"
+                )
+        review_note = source.get("review_note")
+        if review_note is not None:
+            if not isinstance(review_note, str) or not review_note.strip():
+                raise ValueError(f"index.sources[{pos}].review_note must be a non-empty string when present")
+        reviewed_at = source.get("reviewed_at")
+        if reviewed_at is not None:
+            if not isinstance(reviewed_at, str) or not reviewed_at.strip():
+                raise ValueError(f"index.sources[{pos}].reviewed_at must be a non-empty string when present")
         seen_ids.add(source_id)
         seen_files.add(file_relpath)
         max_numeric_id = max(max_numeric_id, int(source_id.split("_", 1)[1]))

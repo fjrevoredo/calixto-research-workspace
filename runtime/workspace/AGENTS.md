@@ -37,6 +37,8 @@ installs Playwright Chromium for live web scraping.
 
 1. Read `skills/deep-research/SKILL.md` for general research or
    `skills/literature-review/SKILL.md` for paper-heavy work.
+   Read the file directly from this workspace. Do not rely on a generic skill
+   loader to discover workspace-local skills.
 2. Set or refine the question in `config.json`.
 3. Run workspace-local scripts from this directory.
 
@@ -47,14 +49,20 @@ Search discipline matters:
   and run `workspace_info.py audit .`.
 - Use only bare `src_NNN` citations in findings and reports, never file paths such as
   `papers/src_001`.
-- Keep `next_finding_id` and `next_insight_id` in `config.json` aligned with the
-  highest IDs present in `notes/findings.md` and `notes/summary.md`.
+- After writing findings or insights, run `workspace_info.py audit .`.
+  If the audit reports counter drift, run `workspace_info.py sync-counters .`.
+- When you intentionally discard or finish reviewing a source, record that state with
+  `workspace_info.py review-source . <src_NNN> <pending|discarded|used>`.
+- Record open questions in `notes/gaps.md` and populate `outputs/bibliography.md`
+  before handoff.
 
 Recommended command style:
 
 ```bash
 uv run python scripts/search_web.py "your query" --workspace . --max-results 10
 uv run python scripts/search_arxiv.py "your query" --workspace . --max-results 10
+uv run python scripts/workspace_info.py review-source . src_007 discarded --note "Low-signal landing page"
+uv run python scripts/workspace_info.py sync-counters .
 uv run python scripts/workspace_info.py audit .
 ```
 

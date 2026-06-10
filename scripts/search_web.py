@@ -257,6 +257,7 @@ def index_entry_for_source(
         "added_at": utcnow_iso(),
         "query": query,
         "word_count": source_word_count,
+        "review_status": "pending",
     }
     if extras:
         entry.update(extras)
@@ -630,6 +631,7 @@ def run_search(
                             "retried_at": utcnow_iso(),
                         }
                     )
+                    target_entry.setdefault("review_status", "pending")
                     target_entry.pop("error", None)
                     for key, value in prepared["index_extra"].items():
                         if value in (None, ""):

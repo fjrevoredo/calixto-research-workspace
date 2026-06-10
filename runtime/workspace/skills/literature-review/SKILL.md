@@ -12,6 +12,8 @@ metadata:
 # Literature Review
 
 Use this workflow from the root of a standalone workspace.
+Read this file directly from `skills/literature-review/SKILL.md`. Generic skill
+loaders may not discover workspace-local skills.
 
 ## Goal
 
@@ -83,20 +85,28 @@ Append findings to `notes/findings.md` and note methodology, venue, dataset,
 baseline quality, reproducibility, and obvious limitations.
 
 Use bare `src_NNN` citations only, never file paths such as `papers/src_001`.
-After writing findings, update `config.json` so `next_finding_id` is still one
-higher than the highest finding ID present.
+If a source is tangential or low-value, mark it with
+`workspace_info.py review-source . src_NNN discarded --note "reason"`.
+After writing findings, run `workspace_info.py audit .` and, if needed,
+`workspace_info.py sync-counters .` so `next_finding_id` stays aligned with the
+highest finding ID present.
 
 ### Step 5: Synthesize themes and gaps
 
 Use `notes/summary.md` for recurring themes, disagreements, and open questions.
 
-After writing insights, update `config.json` so `next_insight_id` is still one
-higher than the highest insight ID present.
+Record unresolved questions and follow-up search ideas in `notes/gaps.md`.
+After writing insights, run `workspace_info.py audit .` and, if needed,
+`workspace_info.py sync-counters .` so `next_insight_id` stays aligned with the
+highest insight ID present.
 
 ### Step 6: Write the review
 
 Write `outputs/report.md` with inline `[src_NNN]` citations and clear sections
 for background, methods, themes, limitations, and gaps.
+
+Populate `outputs/bibliography.md` before handoff with quality notes for the
+papers and web context you kept.
 
 ### Step 7: Audit the workspace
 

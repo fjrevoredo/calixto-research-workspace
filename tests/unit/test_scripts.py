@@ -101,6 +101,23 @@ class TestInitWorkspace:
         assert out["workspace_layout"] == "standalone"
         assert Path(out["runtime_manifest"]).name == "workspace-manifest.json"
 
+    def test_fresh_workspace_audit_is_clean(self, tmp_path: Path) -> None:
+        run_script(
+            str(SCRIPTS_DIR / "init_workspace.py"),
+            "audit-clean",
+            "--path",
+            str(tmp_path),
+        )
+        workspace = tmp_path / "audit-clean"
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "audit",
+            str(workspace),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "ok"
+
     def test_rejects_invalid_name(self, tmp_path: Path) -> None:
         result = run_script(
             str(SCRIPTS_DIR / "init_workspace.py"),
@@ -505,6 +522,398 @@ class TestWorkspaceReliabilityRegressions:
         ]
         assert out["counters"]["next_finding_id"]["valid"] is False
         assert out["counters"]["next_insight_id"]["valid"] is False
+        assert out["remediation"]["sync_counters_command"].endswith(f"sync-counters {ws}")
+
+    def test_sync_counters_updates_config_from_note_contents(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "sync-counters")
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        cfg["next_finding_id"] = 1
+        cfg["next_insight_id"] = 1
+        (ws / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        (ws / "notes" / "findings.md").write_text(
+            "## fnd_001\n**Source:** src_001\n**Fact:** one\n\n## fnd_002\n**Source:** src_001\n**Fact:** two\n",
+            encoding="utf-8",
+        )
+        (ws / "notes" / "summary.md").write_text(
+            "## ins_001\n**Based on:** fnd_001, fnd_002\n**Insight:** combined\n",
+            encoding="utf-8",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "sync-counters",
+            str(ws),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "ok"
+        assert out["changed"] is True
+        assert out["counters"]["next_finding_id"]["new"] == 3
+        assert out["counters"]["next_insight_id"]["new"] == 2
+        cfg_after = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        assert cfg_after["next_finding_id"] == 3
+        assert cfg_after["next_insight_id"] == 2
+
+    def test_sync_counters_is_noop_when_already_correct(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "sync-counters-noop")
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        cfg["next_finding_id"] = 2
+        cfg["next_insight_id"] = 2
+        (ws / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        (ws / "notes" / "findings.md").write_text(
+            "## fnd_001\n**Source:** src_001\n**Fact:** one\n",
+            encoding="utf-8",
+        )
+        (ws / "notes" / "summary.md").write_text(
+            "## ins_001\n**Based on:** fnd_001\n**Insight:** one\n",
+            encoding="utf-8",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "sync-counters",
+            str(ws),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["changed"] is False
+        assert out["counters"]["next_finding_id"]["changed"] is False
+        assert out["counters"]["next_insight_id"]["changed"] is False
+
+    def test_sync_counters_does_not_mask_malformed_identifiers(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "sync-counters-malformed")
+        (ws / "notes" / "findings.md").write_text(
+            "## fnd001\n**Source:** src_001\n**Fact:** malformed heading\n",
+            encoding="utf-8",
+        )
+        (ws / "notes" / "summary.md").write_text(
+            "## ins001\n**Based on:** fnd001\n**Insight:** malformed heading\n",
+            encoding="utf-8",
+        )
+
+        sync_result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "sync-counters",
+            str(ws),
+        )
+        assert sync_result.returncode == 0, sync_result.stderr
+
+        audit_result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "audit",
+            str(ws),
+        )
+        assert audit_result.returncode == 0, audit_result.stderr
+        out = json.loads(audit_result.stdout)
+        assert out["status"] == "error"
+        assert out["malformed_identifiers"]["finding_ids"] == ["fnd001"]
+        assert out["malformed_identifiers"]["insight_ids"] == ["ins001"]
+        assert out["malformed_identifiers"]["finding_in_summary"] == ["fnd001"]
+
+    def test_review_source_updates_index_metadata(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "review-source")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
+        (ws / "sources" / "web" / "src_001.md").write_text(
+            "---\nid: src_001\nurl: https://example.com/review\n---\n\n# Review\n",
+            encoding="utf-8",
+        )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 2,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/review",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/review",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "pending",
+                        }
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        cfg["next_source_id"] = 2
+        (ws / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "review-source",
+            str(ws),
+            "src_001",
+            "discarded",
+            "--note",
+            "duplicate coverage",
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "ok"
+        assert out["source"]["review_status"] == "discarded"
+        assert out["source"]["review_note"] == "duplicate coverage"
+        idx = json.loads((ws / "sources" / "index.json").read_text(encoding="utf-8"))
+        assert idx["sources"][0]["review_status"] == "discarded"
+        assert idx["sources"][0]["review_note"] == "duplicate coverage"
+        assert "reviewed_at" in idx["sources"][0]
+
+    def test_audit_classifies_orphaned_sources_by_review_status(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "orphan-breakdown")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
+        for source_id in ("src_001", "src_002", "src_003"):
+            (ws / "sources" / "web" / f"{source_id}.md").write_text(
+                f"---\nid: {source_id}\nurl: https://example.com/{source_id}\n---\n\n# {source_id}\n",
+                encoding="utf-8",
+            )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 4,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/src_001",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/src_001",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "pending",
+                        },
+                        {
+                            "id": "src_002",
+                            "url": "https://example.com/src_002",
+                            "file": "web/src_002.md",
+                            "url_normalized": "example.com/src_002",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "discarded",
+                            "review_note": "marketing page",
+                            "reviewed_at": "2026-06-10T01:00:00Z",
+                        },
+                        {
+                            "id": "src_003",
+                            "url": "https://example.com/src_003",
+                            "file": "web/src_003.md",
+                            "url_normalized": "example.com/src_003",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "pending",
+                            "snippet_only": True,
+                            "error": "timeout",
+                        },
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "audit",
+            str(ws),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "warning"
+        assert out["orphaned_source_breakdown"]["pending"] == ["src_001"]
+        assert out["orphaned_source_breakdown"]["discarded"] == ["src_002"]
+        assert out["orphaned_source_breakdown"]["low_signal_or_error"] == ["src_003"]
+        assert out["source_review_counts"]["pending"] == 2
+        assert out["source_review_counts"]["discarded"] == 1
+
+    def test_search_web_marks_new_sources_pending_review(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "web-review-status")
+        cache_dir = tmp_path / "cache-web-review"
+        build_cache_file(cache_dir, "duckduckgo", "review status query", 1)
+
+        result = run_script(
+            str(SCRIPTS_DIR / "search_web.py"),
+            "review status query",
+            "--workspace",
+            str(ws),
+            "--max-results",
+            "1",
+            "--no-scrape",
+            "--use-cache",
+            "--cache-dir",
+            str(cache_dir),
+        )
+        assert result.returncode == 0, result.stderr
+        idx = json.loads((ws / "sources" / "index.json").read_text(encoding="utf-8"))
+        assert idx["sources"][0]["review_status"] == "pending"
+
+    def test_search_arxiv_marks_new_sources_pending_review(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "arxiv-review-status")
+        cache_dir = tmp_path / "cache-arxiv-review"
+        build_cache_file(
+            cache_dir,
+            "arxiv",
+            "review status paper",
+            1,
+            results=[
+                {
+                    "arxiv_id": "2401.01234",
+                    "url": "https://arxiv.org/abs/2401.01234",
+                    "pdf_url": "https://arxiv.org/pdf/2401.01234",
+                    "title": "Paper",
+                    "summary": "Paper summary",
+                    "authors": "Ada Lovelace",
+                    "date_published": "2024-01-01",
+                    "categories": ["cs.AI"],
+                    "primary_category": "cs.AI",
+                }
+            ],
+            sort_by="relevance",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "search_arxiv.py"),
+            "review status paper",
+            "--workspace",
+            str(ws),
+            "--max-results",
+            "1",
+            "--use-cache",
+            "--cache-dir",
+            str(cache_dir),
+        )
+        assert result.returncode == 0, result.stderr
+        idx = json.loads((ws / "sources" / "index.json").read_text(encoding="utf-8"))
+        assert idx["sources"][0]["review_status"] == "pending"
+
+    def test_show_reports_scope_limit_overrun(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "scope-show")
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        cfg["scope"]["max_sources"] = 1
+        cfg["next_source_id"] = 3
+        (ws / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
+        for source_id in ("src_001", "src_002"):
+            (ws / "sources" / "web" / f"{source_id}.md").write_text(
+                f"---\nid: {source_id}\nurl: https://example.com/{source_id}\n---\n\n# {source_id}\n",
+                encoding="utf-8",
+            )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 3,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/src_001",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/src_001",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "pending",
+                        },
+                        {
+                            "id": "src_002",
+                            "url": "https://example.com/src_002",
+                            "file": "web/src_002.md",
+                            "url_normalized": "example.com/src_002",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "pending",
+                        },
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "show",
+            str(ws),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "ok"
+        assert out["scope_limits"]["max_sources"] == 1
+        assert out["scope_limits"]["exceeded"] is True
+        assert out["scope_limits"]["over_by"] == 1
+
+    def test_audit_warns_when_total_sources_exceeds_max_sources(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "scope-audit")
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        cfg["scope"]["max_sources"] = 1
+        cfg["next_source_id"] = 3
+        cfg["next_finding_id"] = 2
+        cfg["next_insight_id"] = 1
+        (ws / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
+        for source_id in ("src_001", "src_002"):
+            (ws / "sources" / "web" / f"{source_id}.md").write_text(
+                f"---\nid: {source_id}\nurl: https://example.com/{source_id}\n---\n\n# {source_id}\n",
+                encoding="utf-8",
+            )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 3,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/src_001",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/src_001",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "used",
+                            "reviewed_at": "2026-06-10T01:00:00Z",
+                        },
+                        {
+                            "id": "src_002",
+                            "url": "https://example.com/src_002",
+                            "file": "web/src_002.md",
+                            "url_normalized": "example.com/src_002",
+                            "added_at": "2026-06-10T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "used",
+                            "reviewed_at": "2026-06-10T01:00:00Z",
+                        },
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (ws / "notes" / "findings.md").write_text(
+            "## fnd_001\n**Source:** src_001, src_002\n**Fact:** both cited\n",
+            encoding="utf-8",
+        )
+        (ws / "notes" / "summary.md").write_text("", encoding="utf-8")
+        (ws / "outputs" / "report.md").write_text(
+            "# Report\n\nBoth sources matter [src_001, src_002].\n",
+            encoding="utf-8",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "audit",
+            str(ws),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "warning"
+        assert out["scope_limits"]["max_sources"] == 1
+        assert out["scope_limits"]["exceeded"] is True
+        assert out["scope_limits"]["over_by"] == 1
+        assert "configured max_sources" in out["summary"]
 
     def test_concurrent_search_web_preserves_all_updates(self, tmp_path: Path) -> None:
         ws = self._make_workspace(tmp_path, "concurrent-web")

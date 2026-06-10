@@ -1,6 +1,8 @@
 # Bibliography
 
 All sources with quality ratings. Mirror the structure of `sources/index.json` with human-readable annotations.
+Populate this before handoff so a future agent or reviewer can see which
+sources were kept, how strong they are, and why they matter.
 
 ## Format
 

@@ -340,6 +340,7 @@ def run_arxiv_search(
                     "added_at": utcnow_iso(),
                     "query": query,
                     "word_count": wc,
+                    "review_status": "pending",
                     "title": result["title"],
                     "arxiv_id": arxiv_id,
                     "authors": result["authors"],

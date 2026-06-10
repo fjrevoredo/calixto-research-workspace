@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from .base import SearchError, SearchProvider, SearchResult
 
@@ -39,6 +40,18 @@ DEFAULT_DELAY_SECONDS = 3.0
 DEFAULT_MAX_RETRIES = 3
 # Backoff base in seconds (2 -> 4 -> 8 between attempts)
 BACKOFF_BASE_SECONDS = 2.0
+
+
+def _is_supported_result_url(url: str) -> bool:
+    """Return True when a DDG result URL is directly scrapeable."""
+    if not url or not url.startswith(("http://", "https://")):
+        return False
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        return False
+    if parsed.path == "/clev" and "startpageresultclick" in parsed.query.lower():
+        return False
+    return True
 
 
 class DuckDuckGoProvider(SearchProvider):
@@ -139,7 +152,7 @@ class DuckDuckGoProvider(SearchProvider):
                 results: list[SearchResult] = []
                 for r in raw_results:
                     url = r.get("href") or r.get("url") or ""
-                    if not url:
+                    if not _is_supported_result_url(url):
                         continue
                     title = r.get("title") or ""
                     snippet = r.get("body") or r.get("snippet") or ""

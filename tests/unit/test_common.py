@@ -306,6 +306,47 @@ class TestWorkspaceStateCoordinator:
                 },
             )
 
+    def test_validate_workspace_search_state_accepts_review_metadata(self) -> None:
+        validate_workspace_search_state(
+            {
+                "next_source_id": 2,
+                "searches": [],
+            },
+            {
+                "next_id": 2,
+                "sources": [
+                    {
+                        "id": "src_001",
+                        "url": "https://example.com",
+                        "file": "web/src_001.md",
+                        "review_status": "discarded",
+                        "review_note": "duplicate coverage",
+                        "reviewed_at": utcnow_iso(),
+                    },
+                ],
+            },
+        )
+
+    def test_validate_workspace_search_state_rejects_invalid_review_status(self) -> None:
+        with pytest.raises(ValueError, match="review_status"):
+            validate_workspace_search_state(
+                {
+                    "next_source_id": 2,
+                    "searches": [],
+                },
+                {
+                    "next_id": 2,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com",
+                            "file": "web/src_001.md",
+                            "review_status": "maybe",
+                        },
+                    ],
+                },
+            )
+
     def test_coordinator_commit_writes_source_index_and_config(self, tmp_path: Path) -> None:
         workspace = self._make_workspace(tmp_path)
         with WorkspaceStateCoordinator(workspace) as coordinator:
