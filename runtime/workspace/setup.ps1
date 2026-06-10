@@ -65,6 +65,14 @@ function Invoke-UvPythonCode {
         Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
     }
 }
+function Get-PreferredPowerShellCommand {
+    foreach ($candidate in @('pwsh', 'powershell')) {
+        if (Get-Command $candidate -ErrorAction SilentlyContinue) {
+            return $candidate
+        }
+    }
+    return $null
+}
 function Repair-IncompleteVenv {
     $venvDir = Join-Path $WorkspaceRoot ".venv"
     $venvPython = Join-Path $venvDir "Scripts\python.exe"
@@ -83,7 +91,7 @@ $policy = Get-ExecutionPolicy -Scope CurrentUser
 if ($policy -eq 'Restricted' -or $policy -eq 'AllSigned') {
     if (-not $Force) {
         Write-Warn "Current execution policy is '$policy' which may block this script."
-        Write-Info "To bypass for this run only, use: powershell -ExecutionPolicy Bypass -File .\setup.ps1"
+        Write-Info "To bypass for this run only, use: pwsh -ExecutionPolicy Bypass -File .\setup.ps1"
         Write-Info "Or re-run with -Force to attempt without prompt."
         $choice = Read-Host "Continue anyway? (y/n)"
         if ($choice -ne 'y') { exit 1 }
@@ -121,7 +129,11 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
     Write-Info "uv already installed: $uvVersion"
 } else {
     Write-Info "uv not found, installing via official PowerShell installer..."
-    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+    $powerShellCommand = Get-PreferredPowerShellCommand
+    if (-not $powerShellCommand) {
+        Write-Fail "Neither pwsh nor powershell is available to run the uv installer."
+    }
+    & $powerShellCommand -NoProfile -ExecutionPolicy ByPass -Command "irm https://astral.sh/uv/install.ps1 | iex"
     if ($LASTEXITCODE -ne 0) {
         Write-Fail "uv install failed (rc=$LASTEXITCODE). See https://docs.astral.sh/uv/getting-started/installation/"
     }

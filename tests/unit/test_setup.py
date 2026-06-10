@@ -75,6 +75,65 @@ def _write_executable(path: Path, text: str) -> None:
     path.chmod(path.stat().st_mode | 0o111)
 
 
+def _write_fake_power_shell_commands(
+    fake_bin: Path,
+    *,
+    uv_sync_body_cmd: str,
+    uv_run_body_cmd: str,
+    uv_sync_body_sh: str,
+    uv_run_body_sh: str,
+) -> None:
+    """Create fake python/uv commands that resolve on both Windows and pwsh-on-Linux."""
+    (fake_bin / "python.cmd").write_text(
+        "@echo off\r\n"
+        "if \"%~1\"==\"--version\" (\r\n"
+        "  echo Python 3.11.4\r\n"
+        "  exit /b 0\r\n"
+        ")\r\n"
+        "echo unexpected python args: %* 1>&2\r\n"
+        "exit /b 1\r\n",
+        encoding="utf-8",
+    )
+    _write_executable(
+        fake_bin / "python",
+        """#!/usr/bin/env bash
+        if [[ "${1:-}" == "--version" ]]; then
+          echo "Python 3.11.4"
+          exit 0
+        fi
+        echo "unexpected python args: $*" >&2
+        exit 1
+        """,
+    )
+    (fake_bin / "uv.cmd").write_text(
+        (
+            "@echo off\r\n"
+            "if \"%~1\"==\"--version\" (\r\n"
+            "  echo uv 0.0-test\r\n"
+            "  exit /b 0\r\n"
+            ")\r\n"
+            + uv_sync_body_cmd
+            + uv_run_body_cmd
+            + "echo unexpected uv args: %* 1>&2\r\n"
+            + "exit /b 1\r\n"
+        ),
+        encoding="utf-8",
+    )
+    _write_executable(
+        fake_bin / "uv",
+        f"""#!/usr/bin/env bash
+        if [[ "${{1:-}}" == "--version" ]]; then
+          echo "uv 0.0-test"
+          exit 0
+        fi
+        {textwrap.dedent(uv_sync_body_sh).strip()}
+        {textwrap.dedent(uv_run_body_sh).strip()}
+        echo "unexpected uv args: $*" >&2
+        exit 1
+        """,
+    )
+
+
 # ---------------------------------------------------------------------------
 # setup.sh tests
 # ---------------------------------------------------------------------------
@@ -462,38 +521,42 @@ class TestSetupPs1NativeExitCodes:
 
         fake_bin = tmp_path / "bin"
         fake_bin.mkdir()
-        (fake_bin / "python.cmd").write_text(
-            "@echo off\r\n"
-            "if \"%~1\"==\"--version\" (\r\n"
-            "  echo Python 3.11.4\r\n"
-            "  exit /b 0\r\n"
-            ")\r\n"
-            "echo unexpected python args: %* 1>&2\r\n"
-            "exit /b 1\r\n",
-            encoding="utf-8",
-        )
-        (fake_bin / "uv.cmd").write_text(
-            "@echo off\r\n"
-            "if \"%~1\"==\"--version\" (\r\n"
-            "  echo uv 0.0-test\r\n"
-            "  exit /b 0\r\n"
-            ")\r\n"
+        _write_fake_power_shell_commands(
+            fake_bin,
+            uv_sync_body_cmd=
             "if \"%~1\"==\"sync\" (\r\n"
             "  echo informational sync message 1>&2\r\n"
             "  mkdir \".venv\\Scripts\" >nul 2>&1\r\n"
             "  type nul > \".venv\\Scripts\\python.exe\"\r\n"
             "  exit /b 0\r\n"
-            ")\r\n"
+            ")\r\n",
+            uv_run_body_cmd=
             "if \"%~1\"==\"run\" (\r\n"
             "  if \"%~2\"==\"crawl4ai-setup\" exit /b 0\r\n"
             "  if \"%~2\"==\"python\" (\r\n"
             "    echo ok\r\n"
             "    exit /b 0\r\n"
             "  )\r\n"
-            ")\r\n"
-            "echo unexpected uv args: %* 1>&2\r\n"
-            "exit /b 1\r\n",
-            encoding="utf-8",
+            ")\r\n",
+            uv_sync_body_sh="""
+            if [[ "${1:-}" == "sync" ]]; then
+              echo "informational sync message" >&2
+              mkdir -p ".venv/Scripts"
+              : > ".venv/Scripts/python.exe"
+              exit 0
+            fi
+            """,
+            uv_run_body_sh="""
+            if [[ "${1:-}" == "run" ]]; then
+              if [[ "${2:-}" == "crawl4ai-setup" ]]; then
+                exit 0
+              fi
+              if [[ "${2:-}" == "python" ]]; then
+                echo "ok"
+                exit 0
+              fi
+            fi
+            """,
         )
 
         result = subprocess.run(
@@ -524,32 +587,34 @@ class TestSetupPs1NativeExitCodes:
         fake_bin = tmp_path / "bin"
         fake_bin.mkdir()
         (project_dir / ".venv" / "Scripts").mkdir(parents=True)
-        (fake_bin / "python.cmd").write_text(
-            "@echo off\r\n"
-            "if \"%~1\"==\"--version\" (\r\n"
-            "  echo Python 3.11.4\r\n"
-            "  exit /b 0\r\n"
-            ")\r\n"
-            "echo unexpected python args: %* 1>&2\r\n"
-            "exit /b 1\r\n",
-            encoding="utf-8",
-        )
-        (fake_bin / "uv.cmd").write_text(
-            "@echo off\r\n"
-            "if \"%~1\"==\"--version\" (\r\n"
-            "  echo uv 0.0-test\r\n"
-            "  exit /b 0\r\n"
-            ")\r\n"
+        _write_fake_power_shell_commands(
+            fake_bin,
+            uv_sync_body_cmd=
             "if \"%~1\"==\"sync\" (\r\n"
             "  if exist \".venv\" (echo present>\".uv-sync-state\") else (echo missing>\".uv-sync-state\")\r\n"
             "  mkdir \".venv\\Scripts\" >nul 2>&1\r\n"
             "  type nul > \".venv\\Scripts\\python.exe\"\r\n"
             "  exit /b 0\r\n"
-            ")\r\n"
-            "if \"%~1\"==\"run\" exit /b 0\r\n"
-            "echo unexpected uv args: %* 1>&2\r\n"
-            "exit /b 1\r\n",
-            encoding="utf-8",
+            ")\r\n",
+            uv_run_body_cmd=
+            "if \"%~1\"==\"run\" exit /b 0\r\n",
+            uv_sync_body_sh="""
+            if [[ "${1:-}" == "sync" ]]; then
+              if [[ -d ".venv" ]]; then
+                echo "present" > ".uv-sync-state"
+              else
+                echo "missing" > ".uv-sync-state"
+              fi
+              mkdir -p ".venv/Scripts"
+              : > ".venv/Scripts/python.exe"
+              exit 0
+            fi
+            """,
+            uv_run_body_sh="""
+            if [[ "${1:-}" == "run" ]]; then
+              exit 0
+            fi
+            """,
         )
 
         result = subprocess.run(

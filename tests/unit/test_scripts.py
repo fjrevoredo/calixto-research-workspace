@@ -404,6 +404,7 @@ class TestWorkspaceReliabilityRegressions:
 
     def test_audit_flags_path_qualified_paper_citation(self, tmp_path: Path) -> None:
         ws = self._make_workspace(tmp_path, "audit-paths")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
         (ws / "sources" / "web" / "src_001.md").write_text(
             "---\nid: src_001\nurl: https://example.com/web\n---\n\n# Web\n",
             encoding="utf-8",
@@ -444,6 +445,8 @@ class TestWorkspaceReliabilityRegressions:
 
     def test_audit_flags_unindexed_files_and_counter_drift(self, tmp_path: Path) -> None:
         ws = self._make_workspace(tmp_path, "audit-drift")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
+        (ws / "sources" / "papers").mkdir(parents=True, exist_ok=True)
         (ws / "sources" / "web" / "src_001.md").write_text(
             "---\nid: src_001\nurl: https://example.com/web\n---\n\n# Web\n",
             encoding="utf-8",
