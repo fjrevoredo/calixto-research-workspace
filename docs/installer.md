@@ -100,6 +100,9 @@ Fresh install:
 - copies every staged top-level toolkit entry except source-control metadata
   such as `.git/`
 - copies a root `config.json` if the downloaded source contains one
+- writes `.calixto-toolkit-install.json` after validation so later workspace
+  creation can identify the installed toolkit snapshot even when the installed
+  root is not itself a git repo
 - writes `.calixto-managed-entries` only after the copied toolkit validates
   successfully
 - rejects downloaded `workspaces/`, `notes/`, `outputs/`, and root `*.local`
@@ -112,6 +115,10 @@ Update preserves these root entries:
 - `.git/`
 - `workspaces/`
 - root `*.local` files
+
+Update does not require the installed toolkit root to be a git checkout. The
+installer records its own provenance metadata for fresh installs and refreshes
+that metadata on every successful update.
 
 Update replaces or removes only toolkit-owned entries:
 
@@ -143,6 +150,23 @@ It records top-level toolkit-owned entries only. It does not record:
 Legacy installs without `.calixto-managed-entries` still update known
 historical top-level toolkit entries, but they remain conservative for all
 other collisions.
+
+## Toolkit Provenance Metadata
+
+`.calixto-toolkit-install.json` is installer-generated provenance metadata
+written after a successful install or update.
+
+It records:
+
+- the repository URL used by the installer
+- whether the install followed the default branch, an explicit branch, or a
+  pinned version/tag
+- the source commit SHA when it can be determined
+- the source branch name when it can be determined
+- a git-derived build number only when full source history is available
+
+`init_workspace.py` uses this file to stamp workspace metadata and to run the
+pre-create toolkit update check in installed non-git toolkit roots.
 
 ## Transactional Updates
 

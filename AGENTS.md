@@ -214,6 +214,9 @@ New standalone workspaces record explicit metadata in `config.json`:
 - `runtime_manifest_version`
 - `runtime_bundle_version`
 - `toolkit_version_created_with`
+- `toolkit_commit_created_with`
+- `toolkit_build_number_created_with`
+- `toolkit_ref_created_with`
 
 Use these fields to distinguish standalone workspaces from older layouts. Do
 not infer the layout only from directory names.

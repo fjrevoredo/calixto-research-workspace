@@ -60,12 +60,14 @@ uv run python scripts/init_workspace.py mosquito-research
 
 That creates `workspaces/mosquito-research/` as a standalone snapshot.
 
-In an interactive terminal, `init_workspace.py` checks whether the toolkit
-checkout is behind the remote default branch before it copies the runtime
-bundle. Use `--skip-update-check` to suppress that prompt, `--check-updates`
-to force the check in non-interactive runs, `--require-update-check` to fail
-when the check cannot complete, or `--update-before-create` to print the exact
-installer update command and exit before any workspace is created.
+In an interactive terminal, `init_workspace.py` checks whether the local
+toolkit snapshot is stale before it copies the runtime bundle. Developer
+checkouts use live git state; installed toolkit roots use installer-written
+provenance metadata even though the installed root is not itself a git repo.
+Use `--skip-update-check` to suppress that prompt, `--check-updates` to force
+the check in non-interactive runs, `--require-update-check` to fail when the
+check cannot complete, or `--update-before-create` to print the exact installer
+update command and exit before any workspace is created.
 
 ## Work Inside The Workspace
 

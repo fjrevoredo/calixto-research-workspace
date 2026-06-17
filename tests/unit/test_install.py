@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
@@ -53,6 +54,22 @@ def base_env() -> dict[str, str]:
     return env
 
 
+def assert_install_metadata(target: Path, repo_url: str) -> None:
+    metadata = json.loads((target / ".calixto-toolkit-install.json").read_text(encoding="utf-8"))
+    assert metadata["metadata_version"] == 1
+    assert metadata["repo_url"] == repo_url
+    assert metadata["selector_kind"] == "default_branch"
+    assert metadata["selector_value"] is None
+    assert metadata["toolkit_ref_name"] == "main"
+    assert isinstance(metadata["toolkit_commit"], str) and metadata["toolkit_commit"]
+    assert metadata["source_history"] in {"full", "shallow"}
+    if metadata["source_history"] == "full":
+        assert isinstance(metadata["toolkit_build_number"], int)
+        assert metadata["toolkit_build_number"] > 0
+    else:
+        assert metadata["toolkit_build_number"] is None
+
+
 def test_fresh_install_copies_root_config_and_writes_managed_entries(
     tmp_path: Path,
 ) -> None:
@@ -86,6 +103,7 @@ def test_fresh_install_copies_root_config_and_writes_managed_entries(
     managed = (target / ".calixto-managed-entries").read_text(encoding="utf-8")
     assert "config.json" not in managed
     assert ".gitignore" in managed
+    assert_install_metadata(target, str(remote))
     assert_no_installer_artifacts(target)
 
 
@@ -178,6 +196,7 @@ def test_update_preserves_user_data_and_retires_removed_managed_entry(
     assert (git_dir / "HEAD").read_text(encoding="utf-8") == git_head_before
     assert (target / "user-owned.txt").read_text(encoding="utf-8") == "keep\n"
     assert not (target / "examples").exists()
+    assert_install_metadata(target, str(remote))
     assert_no_installer_artifacts(target)
 
 

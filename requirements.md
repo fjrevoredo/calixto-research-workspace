@@ -695,9 +695,10 @@ quality_requires_corroboration: false
 
 The `next_source_id`, `next_finding_id`, and `next_insight_id` fields track the next available ID for each type. Scripts and the agent increment these when creating new items.
 `toolkit_commit_created_with` is the authoritative toolkit identity for the
-workspace snapshot. `toolkit_build_number_created_with` is the git commit-count
-build number for that checkout, and `toolkit_ref_created_with` records the
-local symbolic ref when available.
+workspace snapshot when toolkit provenance is available.
+`toolkit_build_number_created_with` is the git commit-count build number for
+that snapshot when full history is available, and
+`toolkit_ref_created_with` records the local symbolic ref when available.
 
 ### 11.3 Deduplication Registry (`sources/index.json`)
 

@@ -95,6 +95,27 @@ function Get-SelectedRef {
     return ''
 }
 
+function Get-SelectedRefKind {
+    if ($Version) {
+        return 'version'
+    }
+    if ($BranchExplicit) {
+        return 'branch'
+    }
+    return 'default_branch'
+}
+
+function Get-InstallerSelectorArguments {
+    $arguments = @(
+        '--selector-kind', (Get-SelectedRefKind)
+    )
+    $selectorValue = Get-SelectedRef
+    if ($selectorValue) {
+        $arguments += @('--selector-value', $selectorValue)
+    }
+    return $arguments
+}
+
 function Validate-SelectorContract {
     if ($Version -and $BranchExplicit) {
         Write-Fail "Specify either -Branch or -Version, not both."
@@ -406,11 +427,13 @@ function Invoke-FreshInstall {
     }
 
     $coreScript = Copy-InstallerCore -SourceRoot $sourceRoot -StagingDirectory $staging
-    $exitCode = Invoke-InstallerCore -CoreScript $coreScript -Arguments @(
+    $installerCoreArgs = @(
         'apply-fresh',
         '--source-root', $sourceRoot,
-        '--target-dir', $TargetDir
-    )
+        '--target-dir', $TargetDir,
+        '--repo-url', $RepoUrl
+    ) + (Get-InstallerSelectorArguments)
+    $exitCode = Invoke-InstallerCore -CoreScript $coreScript -Arguments $installerCoreArgs
     if ($exitCode -ne 0) {
         Write-Warn "Fresh install failed. Staging preserved at $staging for inspection."
         exit $exitCode
@@ -486,11 +509,13 @@ function Invoke-UpdateWorkspace {
         exit $recoverExitCode
     }
 
-    $updateExitCode = Invoke-InstallerCore -CoreScript $coreScript -Arguments @(
+    $installerCoreArgs = @(
         'apply-update',
         '--source-root', $sourceRoot,
-        '--target-dir', $TargetDir
-    )
+        '--target-dir', $TargetDir,
+        '--repo-url', $RepoUrl
+    ) + (Get-InstallerSelectorArguments)
+    $updateExitCode = Invoke-InstallerCore -CoreScript $coreScript -Arguments $installerCoreArgs
     if ($updateExitCode -ne 0) {
         Cleanup-Path $staging
         exit $updateExitCode

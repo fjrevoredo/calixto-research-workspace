@@ -6,8 +6,8 @@ Usage:
 
 What it does:
     1. Validates the name is a valid slug
-    2. Optionally checks whether the local toolkit checkout is behind the remote
-       default branch
+    2. Optionally checks whether the local toolkit snapshot is stale relative
+       to the selected remote update source
     3. Verifies the workspace does not already exist
     4. Copies the standalone runtime bundle to <path>/<name>/
     5. Updates config.json with the workspace name, metadata, and timestamps
@@ -171,7 +171,8 @@ def _should_check_updates(args: argparse.Namespace, interactive: bool) -> bool:
 def _update_command_from_freshness(freshness: dict) -> str:
     return build_toolkit_update_command(
         repo_url=freshness.get("installer_repo_url"),
-        branch=freshness.get("default_branch"),
+        selector_kind=freshness.get("selected_ref_kind"),
+        selector_value=freshness.get("selected_ref_value"),
     )
 
 
@@ -179,19 +180,19 @@ def _warn_on_nonblocking_freshness_state(freshness: dict) -> None:
     status = freshness["status"]
     if status == "ahead":
         _console(
-            "Toolkit update check: local checkout is ahead of the remote default branch; "
+            "Toolkit update check: local toolkit snapshot is ahead of the remote default branch; "
             "workspace creation will use the current local snapshot."
         )
         return
     if status == "diverged":
         _console(
-            "Toolkit update check: local checkout has diverged from the remote default branch; "
+            "Toolkit update check: local toolkit snapshot has diverged from the remote default branch; "
             "workspace creation will use the current local snapshot."
         )
         return
     if status == "remote_newer_unknown_relationship":
         _console(
-            "Toolkit update check: remote default branch has a newer commit, but the local checkout "
+            "Toolkit update check: remote default branch has a newer commit, but the local toolkit snapshot "
             "does not contain enough history to classify the relationship. Continuing with the current "
             "local snapshot."
         )
@@ -224,10 +225,11 @@ def maybe_check_for_toolkit_updates(args: argparse.Namespace) -> None:
 
     if status == "up_to_date":
         if args.check_updates:
-            _console("Toolkit update check: local checkout is up to date with the remote default branch.")
+            ref_name = freshness.get("default_branch") or "the selected remote reference"
+            _console(f"Toolkit update check: local toolkit snapshot is up to date with {ref_name}.")
         return
 
-    if status == "behind":
+    if status in {"behind", "update_available"}:
         local_desc = _describe_build(
             freshness.get("local_commit"),
             freshness.get("local_build_number"),
@@ -240,11 +242,17 @@ def maybe_check_for_toolkit_updates(args: argparse.Namespace) -> None:
         behind_text = ""
         if behind_by is not None:
             behind_text = f" and is {behind_by} commit{'s' if behind_by != 1 else ''} behind"
-        branch_name = freshness.get("default_branch") or "the remote default branch"
-        message = (
-            f"Toolkit update available: local {local_desc} is behind {branch_name} at {latest_desc}{behind_text}. "
-            "Continuing will create the workspace from the current local toolkit snapshot."
-        )
+        branch_name = freshness.get("default_branch") or "the selected remote reference"
+        if status == "behind":
+            message = (
+                f"Toolkit update available: local {local_desc} is behind {branch_name} at {latest_desc}{behind_text}. "
+                "Continuing will create the workspace from the current local toolkit snapshot."
+            )
+        else:
+            message = (
+                f"Toolkit update available: local {local_desc} differs from {branch_name} at {latest_desc}. "
+                "Continuing will create the workspace from the current local toolkit snapshot."
+            )
         if args.update_before_create:
             update_command = _update_command_from_freshness(freshness)
             emit_error(
@@ -276,7 +284,7 @@ def maybe_check_for_toolkit_updates(args: argparse.Namespace) -> None:
     if args.update_before_create and status in {"remote_newer_unknown_relationship", "unknown"}:
         emit_error(
             "update_check_inconclusive",
-            "toolkit update check could not determine whether the local checkout is stale; "
+            "toolkit update check could not determine whether the local toolkit snapshot is stale; "
             "no workspace was created because --update-before-create was requested",
             extra={"workspace_created": False},
         )
@@ -299,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
     update_group.add_argument(
         "--check-updates",
         action="store_true",
-        help="Check whether the toolkit is behind the remote default branch before workspace creation.",
+        help="Check whether the local toolkit snapshot is stale before workspace creation.",
     )
     update_group.add_argument(
         "--skip-update-check",

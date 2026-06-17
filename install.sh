@@ -121,6 +121,16 @@ selected_ref() {
     fi
 }
 
+selected_ref_kind() {
+    if [ -n "$VERSION" ]; then
+        printf '%s\n' "version"
+    elif [ "$REPO_BRANCH_EXPLICIT" -eq 1 ]; then
+        printf '%s\n' "branch"
+    else
+        printf '%s\n' "default_branch"
+    fi
+}
+
 validate_selector_contract() {
     if [ -n "$VERSION" ] && [ "$REPO_BRANCH_EXPLICIT" -eq 1 ]; then
         fail "Specify either --branch or --version, not both."
@@ -400,7 +410,10 @@ fresh_install() {
         "$core_script" \
         apply-fresh \
         --source-root "$source_root" \
-        --target-dir "$TARGET_DIR"
+        --target-dir "$TARGET_DIR" \
+        --repo-url "$REPO_URL" \
+        --selector-kind "$(selected_ref_kind)" \
+        --selector-value "$(selected_ref)"
     then
         warn "Fresh install failed. Staging preserved at $staging for inspection."
         exit 1
@@ -486,7 +499,10 @@ update_workspace() {
         "$core_script" \
         apply-update \
         --source-root "$source_root" \
-        --target-dir "$TARGET_DIR"
+        --target-dir "$TARGET_DIR" \
+        --repo-url "$REPO_URL" \
+        --selector-kind "$(selected_ref_kind)" \
+        --selector-value "$(selected_ref)"
     then
         cleanup_path "$staging"
         exit 1

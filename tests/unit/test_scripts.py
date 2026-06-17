@@ -276,6 +276,28 @@ class TestToolkitGit:
         assert toolkit_git.toolkit_build_number() is None
         assert toolkit_git.toolkit_ref_name() is None
 
+    def test_build_metadata_helpers_fall_back_to_installer_metadata_when_git_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import toolkit_git
+
+        monkeypatch.setattr(toolkit_git, "_run_git", lambda *args, check=True: None)
+        monkeypatch.setattr(
+            toolkit_git,
+            "load_toolkit_install_metadata",
+            lambda: {
+                "toolkit_commit": "abc123def456",
+                "toolkit_build_number": 42,
+                "toolkit_ref_name": "main",
+            },
+        )
+
+        assert toolkit_git.toolkit_build_metadata() == {
+            "toolkit_commit_created_with": "abc123def456",
+            "toolkit_build_number_created_with": 42,
+            "toolkit_ref_created_with": "main",
+        }
+
     def test_check_toolkit_freshness_reports_behind(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import toolkit_git
 
@@ -364,6 +386,126 @@ class TestToolkitGit:
 
         freshness = toolkit_git.check_toolkit_freshness()
         assert freshness["status"] == "remote_newer_unknown_relationship"
+
+    def test_check_toolkit_freshness_uses_installer_metadata_for_default_branch_install(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import toolkit_git
+
+        local_sha = "1111111111111111111111111111111111111111"
+        remote_sha = "2222222222222222222222222222222222222222"
+        repo_url = "https://github.com/fjrevoredo/calixto-research-workspace.git"
+
+        def fake_run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str] | None:
+            mapping: dict[tuple[str, ...], subprocess.CompletedProcess[str]] = {
+                ("rev-parse", "HEAD"): self._completed(
+                    ["git", *args], returncode=1, stderr="not a git repository\n"
+                ),
+                ("ls-remote", "--symref", repo_url, "HEAD"): self._completed(
+                    ["git", *args],
+                    stdout=f"ref: refs/heads/master HEAD\n{remote_sha}\tHEAD\n",
+                ),
+            }
+            key = tuple(args)
+            if key not in mapping:
+                raise AssertionError(f"unexpected git args: {args}")
+            return mapping[key]
+
+        monkeypatch.setattr(toolkit_git, "_run_git", fake_run_git)
+        monkeypatch.setattr(
+            toolkit_git,
+            "load_toolkit_install_metadata",
+            lambda: {
+                "repo_url": repo_url,
+                "selector_kind": "default_branch",
+                "selector_value": None,
+                "toolkit_commit": local_sha,
+                "toolkit_build_number": None,
+                "toolkit_ref_name": "master",
+            },
+        )
+
+        freshness = toolkit_git.check_toolkit_freshness()
+        assert freshness["status"] == "update_available"
+        assert freshness["local_commit"] == local_sha
+        assert freshness["latest_commit"] == remote_sha
+        assert freshness["default_branch"] == "master"
+        assert freshness["selected_ref_kind"] == "default_branch"
+        assert freshness["selected_ref_value"] is None
+        assert freshness["installer_repo_url"] == repo_url
+
+    def test_check_toolkit_freshness_uses_installer_metadata_for_branch_install(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import toolkit_git
+
+        local_sha = "3333333333333333333333333333333333333333"
+        repo_url = "https://github.com/fjrevoredo/calixto-research-workspace.git"
+
+        def fake_run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str] | None:
+            mapping: dict[tuple[str, ...], subprocess.CompletedProcess[str]] = {
+                ("rev-parse", "HEAD"): self._completed(
+                    ["git", *args], returncode=1, stderr="not a git repository\n"
+                ),
+                ("ls-remote", repo_url, "refs/heads/release-candidate"): self._completed(
+                    ["git", *args],
+                    stdout=f"{local_sha}\trefs/heads/release-candidate\n",
+                ),
+            }
+            key = tuple(args)
+            if key not in mapping:
+                raise AssertionError(f"unexpected git args: {args}")
+            return mapping[key]
+
+        monkeypatch.setattr(toolkit_git, "_run_git", fake_run_git)
+        monkeypatch.setattr(
+            toolkit_git,
+            "load_toolkit_install_metadata",
+            lambda: {
+                "repo_url": repo_url,
+                "selector_kind": "branch",
+                "selector_value": "release-candidate",
+                "toolkit_commit": local_sha,
+                "toolkit_build_number": None,
+                "toolkit_ref_name": "release-candidate",
+            },
+        )
+
+        freshness = toolkit_git.check_toolkit_freshness()
+        assert freshness["status"] == "up_to_date"
+        assert freshness["default_branch"] == "release-candidate"
+        assert freshness["selected_ref_kind"] == "branch"
+        assert freshness["selected_ref_value"] == "release-candidate"
+
+    def test_check_toolkit_freshness_marks_pinned_version_installs_unavailable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import toolkit_git
+
+        def fake_run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str] | None:
+            if args == ("rev-parse", "HEAD"):
+                return self._completed(["git", *args], returncode=1, stderr="not a git repository\n")
+            raise AssertionError(f"unexpected git args: {args}")
+
+        monkeypatch.setattr(toolkit_git, "_run_git", fake_run_git)
+        monkeypatch.setattr(
+            toolkit_git,
+            "load_toolkit_install_metadata",
+            lambda: {
+                "repo_url": "https://github.com/fjrevoredo/calixto-research-workspace.git",
+                "selector_kind": "version",
+                "selector_value": "v0.1.0",
+                "toolkit_commit": "4444444444444444444444444444444444444444",
+                "toolkit_build_number": None,
+                "toolkit_ref_name": None,
+            },
+        )
+
+        freshness = toolkit_git.check_toolkit_freshness()
+        assert freshness["status"] == "unavailable"
+        assert freshness["reason"] == "pinned_version_install"
+        assert freshness["selected_ref_kind"] == "version"
+        assert freshness["selected_ref_value"] == "v0.1.0"
 
 
 class TestInitWorkspaceUpdateChecks:
@@ -532,6 +674,36 @@ class TestInitWorkspaceUpdateChecks:
         assert json.loads(captured.out)["status"] == "ok"
         assert "Toolkit update available" in captured.err
         assert (tmp_path / "warn-only" / "config.json").exists()
+
+    def test_explicit_check_updates_warns_but_continues_for_installed_branch_snapshot(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import init_workspace
+
+        monkeypatch.setattr(init_workspace, "is_interactive_terminal", lambda: False)
+        monkeypatch.setattr(
+            init_workspace,
+            "check_toolkit_freshness",
+            lambda: {
+                "status": "update_available",
+                "local_commit": "1111111111111111111111111111111111111111",
+                "local_build_number": None,
+                "latest_commit": "2222222222222222222222222222222222222222",
+                "latest_build_number": None,
+                "default_branch": "release-candidate",
+                "selected_ref_kind": "branch",
+                "selected_ref_value": "release-candidate",
+                "installer_repo_url": "https://github.com/fjrevoredo/calixto-research-workspace.git",
+            },
+        )
+
+        rc = init_workspace.main(["warn-installed", "--path", str(tmp_path), "--check-updates"])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert json.loads(captured.out)["status"] == "ok"
+        assert "Toolkit update available" in captured.err
+        assert "differs from release-candidate" in captured.err
+        assert (tmp_path / "warn-installed" / "config.json").exists()
 
 
 class TestWorkspaceInfo:
