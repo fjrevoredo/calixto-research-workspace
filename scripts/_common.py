@@ -44,6 +44,96 @@ LOCK_ACQUIRE_TIMEOUT_SECONDS = 30.0
 LOCK_POLL_INTERVAL_SECONDS = 0.1
 SOURCE_ID_RE = re.compile(r"^src_(\d{3,})$")
 REVIEW_STATUS_VALUES = {"pending", "discarded", "used"}
+QUALITY_TIER_VALUES = {
+    "authoritative",
+    "scholarly",
+    "established_media",
+    "commercial",
+    "affiliate_or_vendor",
+    "low_signal",
+    "unknown",
+}
+TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")
+STOPWORD_TOKENS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "how",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "was",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+}
+AUTHORITATIVE_HOST_SUFFIXES = {
+    ".gov",
+}
+AUTHORITATIVE_HOSTS = {
+    "nih.gov",
+    "ncbi.nlm.nih.gov",
+    "pmc.ncbi.nlm.nih.gov",
+    "pubmed.ncbi.nlm.nih.gov",
+    "who.int",
+}
+SCHOLARLY_HOST_PATTERNS = {
+    "acm.org",
+    "arxiv.org",
+    "bmj.com",
+    "cell.com",
+    "jamanetwork.com",
+    "nejm.org",
+    "nature.com",
+    "oup.com",
+    "sciencedirect.com",
+    "springer.com",
+    "thelancet.com",
+    "wiley.com",
+}
+ESTABLISHED_MEDIA_HOSTS = {
+    "apnews.com",
+    "bbc.com",
+    "bloomberg.com",
+    "ft.com",
+    "npr.org",
+    "reuters.com",
+    "washingtonpost.com",
+    "wsj.com",
+}
+AFFILIATE_OR_VENDOR_TERMS = {
+    "affiliate",
+    "coupon",
+    "discount",
+    "product",
+    "purchase",
+    "shop",
+    "store",
+    "supplement",
+    "vendor",
+}
+COMMERCIAL_TERMS = {
+    "official site",
+    "pricing",
+    "product page",
+    "sales",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +494,29 @@ def validate_workspace_search_state(config: dict[str, Any], index: dict[str, Any
         if reviewed_at is not None:
             if not isinstance(reviewed_at, str) or not reviewed_at.strip():
                 raise ValueError(f"index.sources[{pos}].reviewed_at must be a non-empty string when present")
+        quality_tier = source.get("quality_tier")
+        if quality_tier is not None:
+            if not isinstance(quality_tier, str) or quality_tier not in QUALITY_TIER_VALUES:
+                raise ValueError(
+                    f"index.sources[{pos}].quality_tier must be one of "
+                    f"{sorted(QUALITY_TIER_VALUES)} when present"
+                )
+        quality_reasons = source.get("quality_reasons")
+        if quality_reasons is not None:
+            if not isinstance(quality_reasons, list) or any(
+                not isinstance(reason, str) or not reason.strip()
+                for reason in quality_reasons
+            ):
+                raise ValueError(
+                    f"index.sources[{pos}].quality_reasons must be a list of non-empty strings when present"
+                )
+        quality_requires_corroboration = source.get("quality_requires_corroboration")
+        if quality_requires_corroboration is not None and not isinstance(
+            quality_requires_corroboration, bool
+        ):
+            raise ValueError(
+                f"index.sources[{pos}].quality_requires_corroboration must be a boolean when present"
+            )
         seen_ids.add(source_id)
         seen_files.add(file_relpath)
         max_numeric_id = max(max_numeric_id, int(source_id.split("_", 1)[1]))
@@ -551,6 +664,126 @@ def normalize_url(url: str) -> str:
     if query:
         normalized = f"{normalized}?{query}"
     return normalized.lower()
+
+
+def host_from_url(url: str) -> str:
+    """Return a normalized host name for heuristics and reporting."""
+    if not url:
+        return ""
+    parsed = urlparse(url.strip())
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def significant_terms(text: str) -> list[str]:
+    """Return lowercased non-stopword tokens for deterministic lexical matching."""
+    if not text:
+        return []
+    terms: list[str] = []
+    seen: set[str] = set()
+    for raw in TOKEN_RE.findall(text.lower()):
+        token = raw.strip("-")
+        if len(token) < 3 or token in STOPWORD_TOKENS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        terms.append(token)
+    return terms
+
+
+def lexical_overlap_terms(left_text: str, right_text: str) -> list[str]:
+    """Return deterministic overlapping significant terms between two strings."""
+    left = set(significant_terms(left_text))
+    if not left:
+        return []
+    overlap = left.intersection(significant_terms(right_text))
+    return sorted(overlap)
+
+
+def classify_source_quality(
+    *,
+    url: str,
+    provider: str = "",
+    search_provider: str = "",
+    title: str = "",
+    content_quality: str = "",
+    low_signal: bool = False,
+    snippet_only: bool = False,
+    error: str = "",
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Classify one source into a heuristic quality tier.
+
+    The output is intentionally simple and deterministic. It is triage metadata
+    for the agent, not a semantic truth claim about the source.
+    """
+    provider_name = provider.strip().lower()
+    search_provider_name = search_provider.strip().lower()
+    metadata = metadata or {}
+    host = host_from_url(url)
+    title_text = title.strip().lower()
+    url_text = url.strip().lower()
+    content_quality_name = content_quality.strip().lower()
+
+    reasons: list[str] = []
+    requires_corroboration = False
+    tier = "unknown"
+
+    if low_signal or content_quality_name == "low_signal":
+        tier = "low_signal"
+        reasons.append("low_signal_content")
+        requires_corroboration = True
+    elif error:
+        tier = "low_signal"
+        reasons.append(f"source_error:{error.strip().lower()}")
+        requires_corroboration = True
+    elif provider_name == "pubmed" or metadata.get("pubmed_id"):
+        tier = "authoritative"
+        reasons.append("pubmed_record")
+    elif host in AUTHORITATIVE_HOSTS or any(host.endswith(suffix) for suffix in AUTHORITATIVE_HOST_SUFFIXES):
+        tier = "authoritative"
+        reasons.append("government_or_public_health_domain")
+    elif provider_name == "arxiv" or metadata.get("arxiv_id"):
+        tier = "scholarly"
+        reasons.append("scholarly_record")
+    elif any(pattern in host for pattern in SCHOLARLY_HOST_PATTERNS) or metadata.get("doi"):
+        tier = "scholarly"
+        reasons.append("scholarly_publisher_or_doi")
+    elif any(pattern in host for pattern in ESTABLISHED_MEDIA_HOSTS):
+        tier = "established_media"
+        reasons.append("established_media_domain")
+    elif any(term in url_text or term in title_text for term in AFFILIATE_OR_VENDOR_TERMS):
+        tier = "affiliate_or_vendor"
+        reasons.append("vendor_or_affiliate_pattern")
+        requires_corroboration = True
+    elif any(term in url_text or term in title_text for term in COMMERCIAL_TERMS):
+        tier = "commercial"
+        reasons.append("commercial_pattern")
+        requires_corroboration = True
+
+    if snippet_only:
+        reasons.append("snippet_only")
+        requires_corroboration = True
+    if content_quality_name and content_quality_name != "normal":
+        reasons.append(f"content_quality:{content_quality_name}")
+        requires_corroboration = True
+    if search_provider_name == "arxiv" and tier == "scholarly":
+        reasons.append("preprint_search_provider")
+    if metadata.get("low_relevance_overlap"):
+        reasons.append("low_query_overlap")
+        requires_corroboration = True
+
+    if not reasons:
+        reasons.append("no_strong_signal")
+
+    return {
+        "quality_tier": tier,
+        "quality_reasons": reasons,
+        "quality_requires_corroboration": requires_corroboration,
+    }
 
 
 # ---------------------------------------------------------------------------

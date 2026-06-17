@@ -96,6 +96,7 @@ class TestInitWorkspace:
         assert workspace.joinpath("sources", "index.json").exists()
         assert workspace.joinpath("AGENTS.md").exists()
         assert workspace.joinpath("scripts", "search_web.py").exists()
+        assert workspace.joinpath("scripts", "search_pubmed.py").exists()
         assert workspace.joinpath("providers", "search", "duckduckgo.py").exists()
         assert workspace.joinpath("skills", "deep-research", "SKILL.md").exists()
         assert out["workspace_layout"] == "standalone"
@@ -915,6 +916,275 @@ class TestWorkspaceReliabilityRegressions:
         assert out["scope_limits"]["over_by"] == 1
         assert "configured max_sources" in out["summary"]
 
+    def test_audit_reports_report_sources_not_in_findings(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "traceability-gap")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
+        for source_id in ("src_001", "src_002"):
+            (ws / "sources" / "web" / f"{source_id}.md").write_text(
+                (
+                    f"---\n"
+                    f"id: {source_id}\n"
+                    f"url: https://example.com/{source_id}\n"
+                    f"title: {source_id}\n"
+                    f"---\n\n"
+                    f"# {source_id}\n\n"
+                    f"Methylene blue is discussed here.\n"
+                ),
+                encoding="utf-8",
+            )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 3,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/src_001",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/src_001",
+                            "added_at": "2026-06-17T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "used",
+                            "quality_tier": "authoritative",
+                            "quality_reasons": ["government_or_public_health_domain"],
+                            "quality_requires_corroboration": False,
+                        },
+                        {
+                            "id": "src_002",
+                            "url": "https://example.com/src_002",
+                            "file": "web/src_002.md",
+                            "url_normalized": "example.com/src_002",
+                            "added_at": "2026-06-17T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "used",
+                            "quality_tier": "unknown",
+                            "quality_reasons": ["no_strong_signal"],
+                            "quality_requires_corroboration": True,
+                        },
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        cfg["next_source_id"] = 3
+        cfg["next_finding_id"] = 2
+        (ws / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        (ws / "notes" / "findings.md").write_text(
+            "## fnd_001\n**Source:** src_001\n**Fact:** kept\n",
+            encoding="utf-8",
+        )
+        (ws / "outputs" / "report.md").write_text(
+            "# Report\n\nClaim supported by [src_001, src_002].\n",
+            encoding="utf-8",
+        )
+
+        result = run_script(str(SCRIPTS_DIR / "workspace_info.py"), "audit", str(ws))
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "warning"
+        assert out["report_sources_not_in_findings"] == ["src_002"]
+        assert "bypass findings" in out["summary"]
+
+    def test_audit_strict_traceability_fails_report_bypass_and_pending(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "traceability-strict")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
+        for source_id in ("src_001", "src_002", "src_003"):
+            (ws / "sources" / "web" / f"{source_id}.md").write_text(
+                f"---\nid: {source_id}\nurl: https://example.com/{source_id}\n---\n\n# {source_id}\n",
+                encoding="utf-8",
+            )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 4,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/src_001",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/src_001",
+                            "added_at": "2026-06-17T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "used",
+                        },
+                        {
+                            "id": "src_002",
+                            "url": "https://example.com/src_002",
+                            "file": "web/src_002.md",
+                            "url_normalized": "example.com/src_002",
+                            "added_at": "2026-06-17T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "used",
+                        },
+                        {
+                            "id": "src_003",
+                            "url": "https://example.com/src_003",
+                            "file": "web/src_003.md",
+                            "url_normalized": "example.com/src_003",
+                            "added_at": "2026-06-17T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "pending",
+                        },
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        cfg = json.loads((ws / "config.json").read_text(encoding="utf-8"))
+        cfg["next_source_id"] = 4
+        cfg["next_finding_id"] = 2
+        (ws / "config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        (ws / "notes" / "findings.md").write_text(
+            "## fnd_001\n**Source:** src_001\n**Fact:** kept\n",
+            encoding="utf-8",
+        )
+        (ws / "outputs" / "report.md").write_text(
+            "# Report\n\nClaim supported by [src_001, src_002].\n",
+            encoding="utf-8",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "audit",
+            str(ws),
+            "--strict-traceability",
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "error"
+        assert out["strict_traceability"] is True
+        assert out["strict_traceability_failures"]["report_sources_not_in_findings"] == ["src_002"]
+        assert out["strict_traceability_failures"]["pending_orphaned_sources"] == ["src_003"]
+
+    def test_verify_citations_writes_artifact_with_excerpts(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "verify-citations")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
+        (ws / "sources" / "web" / "src_001.md").write_text(
+            (
+                "---\n"
+                "id: src_001\n"
+                "url: https://example.com/one\n"
+                "title: Example One\n"
+                "---\n\n"
+                "# Example One\n\n"
+                "Methylene blue improved signal in a small trial.\n\n"
+                "The article discusses adverse effects and dosage uncertainty.\n"
+            ),
+            encoding="utf-8",
+        )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 2,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com/one",
+                            "file": "web/src_001.md",
+                            "url_normalized": "example.com/one",
+                            "added_at": "2026-06-17T00:00:00Z",
+                            "query": "q",
+                            "word_count": 20,
+                            "review_status": "pending",
+                            "quality_tier": "unknown",
+                            "quality_reasons": ["no_strong_signal"],
+                            "quality_requires_corroboration": True,
+                        }
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (ws / "notes" / "findings.md").write_text(
+            "## fnd_001\n**Source:** src_001\n**Fact:** cautious support\n",
+            encoding="utf-8",
+        )
+        (ws / "outputs" / "report.md").write_text(
+            "# Report\n\nMethylene blue improved signal in a small trial [src_001].\n",
+            encoding="utf-8",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "workspace_info.py"),
+            "verify-citations",
+            str(ws),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "ok"
+        assert out["artifact_written"] is True
+        assert out["report_citation_count"] == 1
+        artifact = ws / "outputs" / "citation-check.md"
+        assert artifact.exists()
+        text = artifact.read_text(encoding="utf-8")
+        assert "Report line 3" in text
+        assert "Candidate excerpts" in text
+        assert "Methylene blue improved signal in a small trial." in text
+
+    def test_show_reports_quality_tier_counts(self, tmp_path: Path) -> None:
+        ws = self._make_workspace(tmp_path, "quality-show")
+        (ws / "sources" / "web").mkdir(parents=True, exist_ok=True)
+        (ws / "sources" / "papers").mkdir(parents=True, exist_ok=True)
+        (ws / "sources" / "web" / "src_001.md").write_text(
+            "---\nid: src_001\nurl: https://nih.gov/a\n---\n",
+            encoding="utf-8",
+        )
+        (ws / "sources" / "papers" / "src_002.md").write_text(
+            "---\nid: src_002\nurl: https://arxiv.org/abs/2401.01234\n---\n",
+            encoding="utf-8",
+        )
+        (ws / "sources" / "index.json").write_text(
+            json.dumps(
+                {
+                    "next_id": 3,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://nih.gov/a",
+                            "file": "web/src_001.md",
+                            "url_normalized": "nih.gov/a",
+                            "added_at": "2026-06-17T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "used",
+                            "quality_tier": "authoritative",
+                            "quality_reasons": ["government_or_public_health_domain"],
+                            "quality_requires_corroboration": False,
+                        },
+                        {
+                            "id": "src_002",
+                            "url": "https://arxiv.org/abs/2401.01234",
+                            "file": "papers/src_002.md",
+                            "added_at": "2026-06-17T00:00:00Z",
+                            "query": "q",
+                            "word_count": 10,
+                            "review_status": "used",
+                            "quality_tier": "scholarly",
+                            "quality_reasons": ["scholarly_record"],
+                            "quality_requires_corroboration": False,
+                        },
+                    ],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+
+        result = run_script(str(SCRIPTS_DIR / "workspace_info.py"), "show", str(ws))
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["source_quality_tier_counts"]["authoritative"] == 1
+        assert out["source_quality_tier_counts"]["scholarly"] == 1
+
     def test_concurrent_search_web_preserves_all_updates(self, tmp_path: Path) -> None:
         ws = self._make_workspace(tmp_path, "concurrent-web")
         cache_dir = tmp_path / "cache-web"
@@ -1477,3 +1747,195 @@ class TestArxivCacheMiss:
         assert load_cache(cache_dir, "arxiv", "q", 5, category="cs.LG", sort_by="relevance") is None
         # Different sort -> miss
         assert load_cache(cache_dir, "arxiv", "q", 5, category="cs.AI", sort_by="date") is None
+
+
+class TestPubmedAndBiomedicalRouting:
+    def test_search_pubmed_uses_cached_fixture(self, tmp_path: Path) -> None:
+        run_script(str(SCRIPTS_DIR / "init_workspace.py"), "pubmed-cache", "--path", str(tmp_path))
+        ws = tmp_path / "pubmed-cache"
+        cache_dir = tmp_path / "pubmed-cache-data"
+        build_cache_file(
+            cache_dir,
+            "pubmed",
+            "methylene blue safety",
+            1,
+            results=[
+                {
+                    "pubmed_id": "12345678",
+                    "url": "https://pubmed.ncbi.nlm.nih.gov/12345678/",
+                    "title": "Methylene blue safety in adults",
+                    "abstract": "A trial evaluated methylene blue safety outcomes.",
+                    "authors": ["Ada Lovelace", "Grace Hopper"],
+                    "journal": "Clinical Journal",
+                    "date_published": "2024-01-01",
+                    "doi": "10.1000/example",
+                    "mesh_terms": ["Methylene Blue", "Safety"],
+                    "publication_types": ["Clinical Trial"],
+                    "pmc_id": "PMC123456",
+                }
+            ],
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "search_pubmed.py"),
+            "methylene blue safety",
+            "--workspace",
+            str(ws),
+            "--max-results",
+            "1",
+            "--use-cache",
+            "--cache-dir",
+            str(cache_dir),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "ok"
+        assert out["sources_added"] == 1
+        source_text = (ws / "sources" / "papers" / "src_001.md").read_text(encoding="utf-8")
+        meta, body = parse_frontmatter_helper(source_text)
+        assert meta["provider"] == "pubmed"
+        assert meta["quality_tier"] == "authoritative"
+        assert "Clinical Trial" in body
+
+    def test_search_arxiv_warns_for_biomedical_query(self, tmp_path: Path) -> None:
+        run_script(str(SCRIPTS_DIR / "init_workspace.py"), "arxiv-biomed", "--path", str(tmp_path))
+        ws = tmp_path / "arxiv-biomed"
+        cache_dir = tmp_path / "arxiv-biomed-cache"
+        build_cache_file(
+            cache_dir,
+            "arxiv",
+            "methylene blue safety trial",
+            1,
+            results=[
+                {
+                    "arxiv_id": "2401.01234",
+                    "url": "https://arxiv.org/abs/2401.01234",
+                    "pdf_url": "https://arxiv.org/pdf/2401.01234",
+                    "title": "Methylene blue graph embeddings",
+                    "summary": "A computational paper with methylene blue lexical overlap.",
+                    "authors": "Ada Lovelace",
+                    "date_published": "2024-01-01",
+                    "categories": ["cs.AI"],
+                    "primary_category": "cs.AI",
+                }
+            ],
+            sort_by="relevance",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "search_arxiv.py"),
+            "methylene blue safety trial",
+            "--workspace",
+            str(ws),
+            "--max-results",
+            "1",
+            "--use-cache",
+            "--cache-dir",
+            str(cache_dir),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["status"] == "ok"
+        assert any("PubMed" in warning for warning in out["warnings"])
+
+    def test_search_arxiv_must_contain_filters_irrelevant_records(self, tmp_path: Path) -> None:
+        run_script(str(SCRIPTS_DIR / "init_workspace.py"), "arxiv-filter", "--path", str(tmp_path))
+        ws = tmp_path / "arxiv-filter"
+        cache_dir = tmp_path / "arxiv-filter-cache"
+        build_cache_file(
+            cache_dir,
+            "arxiv",
+            "methylene blue",
+            2,
+            results=[
+                {
+                    "arxiv_id": "2401.01234",
+                    "url": "https://arxiv.org/abs/2401.01234",
+                    "pdf_url": "https://arxiv.org/pdf/2401.01234",
+                    "title": "Methylene blue detection model",
+                    "summary": "Mentions methylene blue directly.",
+                    "authors": "Ada Lovelace",
+                    "date_published": "2024-01-01",
+                    "categories": ["cs.CV"],
+                    "primary_category": "cs.CV",
+                },
+                {
+                    "arxiv_id": "2401.09999",
+                    "url": "https://arxiv.org/abs/2401.09999",
+                    "pdf_url": "https://arxiv.org/pdf/2401.09999",
+                    "title": "Blue noise rendering",
+                    "summary": "Does not include the full phrase.",
+                    "authors": "Grace Hopper",
+                    "date_published": "2024-01-02",
+                    "categories": ["cs.GR"],
+                    "primary_category": "cs.GR",
+                },
+            ],
+            sort_by="relevance",
+            must_contain="methylene blue",
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "search_arxiv.py"),
+            "methylene blue",
+            "--workspace",
+            str(ws),
+            "--max-results",
+            "2",
+            "--must-contain",
+            "methylene blue",
+            "--use-cache",
+            "--cache-dir",
+            str(cache_dir),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["sources_added"] == 1
+        assert out["sources_filtered"] == 1
+
+    def test_search_arxiv_marks_low_overlap_saved_results(self, tmp_path: Path) -> None:
+        run_script(str(SCRIPTS_DIR / "init_workspace.py"), "arxiv-overlap", "--path", str(tmp_path))
+        ws = tmp_path / "arxiv-overlap"
+        cache_dir = tmp_path / "arxiv-overlap-cache"
+        build_cache_file(
+            cache_dir,
+            "arxiv",
+            "methylene blue randomized trial",
+            1,
+            results=[
+                {
+                    "arxiv_id": "2401.01234",
+                    "url": "https://arxiv.org/abs/2401.01234",
+                    "pdf_url": "https://arxiv.org/pdf/2401.01234",
+                    "title": "Blue signal processing",
+                    "summary": "Randomized matrices are discussed.",
+                    "authors": "Ada Lovelace",
+                    "date_published": "2024-01-01",
+                    "categories": ["cs.IT"],
+                    "primary_category": "cs.IT",
+                }
+            ],
+            sort_by="relevance",
+            must_contain="",
+            min_query_token_overlap=3,
+        )
+
+        result = run_script(
+            str(SCRIPTS_DIR / "search_arxiv.py"),
+            "methylene blue randomized trial",
+            "--workspace",
+            str(ws),
+            "--max-results",
+            "1",
+            "--min-query-token-overlap",
+            "3",
+            "--use-cache",
+            "--cache-dir",
+            str(cache_dir),
+        )
+        assert result.returncode == 0, result.stderr
+        out = json.loads(result.stdout)
+        assert out["sources_marked_low_relevance"] == 1
+        source_text = (ws / "sources" / "papers" / "src_001.md").read_text(encoding="utf-8")
+        meta, _ = parse_frontmatter_helper(source_text)
+        assert meta["content_quality"] == "low_relevance"

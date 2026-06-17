@@ -6,6 +6,7 @@ Subcommands:
     show    - Show summary of a single workspace
     delete  - Remove a workspace (with confirmation)
     audit   - Verify the traceability chain (src > fnd > ins > report)
+    verify-citations - Build a manual citation review checklist from report.md
     sync-counters - Synchronize finding/insight counters from note contents
     review-source - Update one source review status in sources/index.json
 
@@ -15,7 +16,8 @@ Usage:
     python scripts/workspace_info.py list [--path ./workspaces]
     python scripts/workspace_info.py show <name> [--path ./workspaces]
     python scripts/workspace_info.py delete <name> [--path ./workspaces] [--force]
-    python scripts/workspace_info.py audit <name> [--path ./workspaces]
+    python scripts/workspace_info.py audit <name> [--path ./workspaces] [--strict-traceability]
+    python scripts/workspace_info.py verify-citations <name> [--path ./workspaces] [--output PATH] [--json-only]
     python scripts/workspace_info.py sync-counters <name> [--path ./workspaces]
     python scripts/workspace_info.py review-source <name> <src_NNN> <pending|discarded|used> [--note TEXT] [--path ./workspaces]
 """
@@ -42,10 +44,14 @@ from _common import (
     REVIEW_STATUS_VALUES,
     SOURCE_ID_RE,
     WorkspaceStateCoordinator,
+    classify_source_quality,
     emit_error,
     emit_ok,
+    host_from_url,
     is_valid_slug,
+    lexical_overlap_terms,
     parse_frontmatter,
+    significant_terms,
     utcnow_iso,
     workspace_path,
 )
@@ -170,6 +176,54 @@ def _is_low_signal_or_error(entry: dict[str, Any]) -> bool:
     return bool(str(entry.get("error", "")).strip())
 
 
+def _quality_metadata_for_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Return persisted or computed quality metadata for one source entry."""
+    if str(entry.get("quality_tier", "")).strip():
+        reasons = entry.get("quality_reasons", [])
+        if not isinstance(reasons, list):
+            reasons = []
+        return {
+            "quality_tier": str(entry.get("quality_tier", "")).strip(),
+            "quality_reasons": [str(reason).strip() for reason in reasons if str(reason).strip()],
+            "quality_requires_corroboration": bool(entry.get("quality_requires_corroboration")),
+        }
+    return classify_source_quality(
+        url=str(entry.get("url", "")).strip(),
+        provider=str(entry.get("provider") or entry.get("search_provider") or "").strip(),
+        search_provider=str(entry.get("search_provider", "")).strip(),
+        title=str(entry.get("title", "")).strip(),
+        content_quality=str(entry.get("content_quality", "")).strip(),
+        low_signal=bool(entry.get("low_signal")),
+        snippet_only=bool(entry.get("snippet_only")),
+        error=str(entry.get("error", "")).strip(),
+        metadata=entry,
+    )
+
+
+def _quality_tier_counts(entries: list[dict[str, Any]]) -> dict[str, int]:
+    """Count sources by deterministic quality tier."""
+    counts: dict[str, int] = {}
+    for entry in entries:
+        tier = _quality_metadata_for_entry(entry)["quality_tier"]
+        counts[tier] = counts.get(tier, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _report_evidence_quality_warning(report_entries: list[dict[str, Any]]) -> str | None:
+    """Return a warning when cited report evidence is uniformly low-value."""
+    if not report_entries:
+        return None
+    tiers = {_quality_metadata_for_entry(entry)["quality_tier"] for entry in report_entries}
+    weak_tiers = {"commercial", "affiliate_or_vendor", "unknown"}
+    strong_tiers = {"authoritative", "scholarly"}
+    if tiers and tiers.issubset(weak_tiers) and not tiers.intersection(strong_tiers):
+        return (
+            "All report-cited sources are commercial, affiliate_or_vendor, or unknown. "
+            "Add authoritative or scholarly corroboration before final handoff."
+        )
+    return None
+
+
 def _classify_orphaned_sources(
     orphaned_ids: set[str],
     index_entries_by_id: dict[str, list[dict[str, Any]]],
@@ -233,7 +287,142 @@ def _build_summary(
     if status == "warning" and orphaned_sources:
         reasons.append(f"{orphaned_sources} orphaned source(s)")
     prefix = "ERROR" if status == "error" else "WARNING"
+    if not reasons:
+        return f"{prefix}: traceability review required"
     return f"{prefix}: " + ", ".join(reasons)
+
+
+def _report_citation_lines(report_text: str) -> list[dict[str, Any]]:
+    """Return report lines that cite one or more source IDs."""
+    citations: list[dict[str, Any]] = []
+    for lineno, raw_line in enumerate(report_text.splitlines(), start=1):
+        refs, malformed = _collect_source_references(raw_line)
+        if not refs and not malformed:
+            continue
+        citations.append(
+            {
+                "line_number": lineno,
+                "text": raw_line.strip(),
+                "source_ids": sorted(refs),
+                "malformed_refs": malformed,
+            }
+        )
+    return citations
+
+
+def _source_body_segments(source_text: str) -> list[str]:
+    """Split a source markdown body into short lexical-match candidates."""
+    _, body = parse_frontmatter(source_text)
+    if not body.strip():
+        return []
+    segments = [segment.strip() for segment in re.split(r"\n\s*\n+", body) if segment.strip()]
+    return segments
+
+
+def _excerpt_candidates(
+    citation_text: str,
+    source_text: str,
+    *,
+    max_matches: int = 3,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Return top lexical-overlap excerpts for one cited report line."""
+    citation_terms = significant_terms(citation_text)
+    if not citation_terms:
+        return [], True
+    candidates: list[dict[str, Any]] = []
+    for segment in _source_body_segments(source_text):
+        overlap = lexical_overlap_terms(citation_text, segment)
+        if not overlap:
+            continue
+        candidates.append(
+            {
+                "excerpt": " ".join(segment.split()),
+                "overlap_terms": overlap,
+                "overlap_count": len(overlap),
+            }
+        )
+    candidates.sort(key=lambda item: (-item["overlap_count"], item["excerpt"]))
+    trimmed = candidates[:max_matches]
+    return trimmed, not trimmed
+
+
+def _build_citation_check_markdown(
+    *,
+    workspace: Path,
+    report_entries: list[dict[str, Any]],
+) -> str:
+    """Render a plain Markdown checklist for manual citation verification."""
+    lines = [
+        "# Citation Check",
+        "",
+        "This file is a deterministic review aid. It does not prove semantic correctness.",
+        "Complete the verification fields manually before final handoff.",
+        "",
+    ]
+    if not report_entries:
+        lines.extend(
+            [
+                "_No report citations were found._",
+                "",
+            ]
+        )
+    for entry in report_entries:
+        lines.extend(
+            [
+                f"## Report line {entry['line_number']}",
+                "",
+                f"**Report text:** {entry['text'] or '(blank line)'}",
+                "",
+                f"**Cited sources:** {', '.join(entry['source_ids']) or '(none)'}",
+                "",
+                f"**Verification status:** TODO",
+                "",
+                "**Manual notes:**",
+                "",
+                "- Supports claim:",
+                "- Conflict or caveat:",
+                "- Follow-up action:",
+                "",
+            ]
+        )
+        if entry["warnings"]:
+            lines.append("**Warnings:**")
+            lines.extend([f"- {warning}" for warning in entry["warnings"]])
+            lines.append("")
+        for source in entry["sources"]:
+            lines.extend(
+                [
+                    f"### {source['source_id']}",
+                    "",
+                    f"- File: `{source['file']}`",
+                    f"- URL: {source['url']}",
+                    f"- Host: `{host_from_url(source['url'])}`",
+                    f"- Review status: `{source['review_status']}`",
+                    f"- Quality tier: `{source['quality_tier']}`",
+                    f"- Requires corroboration: `{str(source['quality_requires_corroboration']).lower()}`",
+                ]
+            )
+            if source["quality_reasons"]:
+                lines.append(f"- Quality reasons: {', '.join(source['quality_reasons'])}")
+            if source["warnings"]:
+                lines.extend([f"- Warning: {warning}" for warning in source["warnings"]])
+            lines.append("")
+            if source["excerpts"]:
+                lines.append("**Candidate excerpts:**")
+                for excerpt in source["excerpts"]:
+                    lines.append(
+                        f"- overlap={excerpt['overlap_count']} ({', '.join(excerpt['overlap_terms'])}): {excerpt['excerpt']}"
+                    )
+                lines.append("")
+            else:
+                lines.extend(
+                    [
+                        "**Candidate excerpts:**",
+                        "- none found; manual review required",
+                        "",
+                    ]
+                )
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _resolve_workspace(name_or_path: str, default_parent: Path) -> Path:
@@ -420,6 +609,7 @@ def cmd_show(workspace: Path) -> dict:
     total_sources = sum(indexed_counts.values())
     scope_limits = _scope_limit_details(cfg.get("scope", {}), total_sources)
     review_counts = _review_status_counts(idx.get("sources", []))
+    quality_counts = _quality_tier_counts(idx.get("sources", []))
 
     return {
         "workspace": str(workspace),
@@ -433,6 +623,7 @@ def cmd_show(workspace: Path) -> dict:
         "source_file_counts": file_counts,
         "source_file_count": sum(file_counts.values()),
         "source_review_counts": review_counts,
+        "source_quality_tier_counts": quality_counts,
         "search_count": len(cfg.get("searches", [])),
         "next_source_id": cfg.get("next_source_id", 1),
         "next_finding_id": cfg.get("next_finding_id", 1),
@@ -577,6 +768,110 @@ def cmd_review_source(workspace: Path, source_id: str, review_status: str, note:
     }
 
 
+def cmd_verify_citations(
+    workspace: Path,
+    *,
+    output_path: Path | None = None,
+    json_only: bool = False,
+) -> dict[str, Any]:
+    """Generate a deterministic citation verification artifact for report review."""
+    if not (workspace / "config.json").exists():
+        emit_error("workspace_not_found", f"workspace not found at {workspace}")
+    try:
+        with WorkspaceStateCoordinator(workspace) as coordinator:
+            idx = coordinator.index
+            recovery = coordinator.recovery
+            scanned = _scan_workspace_source_files(workspace)
+            findings_text = _read_file(workspace / "notes" / "findings.md")
+            report_text = _read_file(workspace / "outputs" / "report.md")
+    except (json.JSONDecodeError, OSError) as e:
+        emit_error("workspace_corrupt", f"could not read workspace metadata: {e}")
+
+    findings_src_refs, _ = _collect_source_references(findings_text)
+    index_entries_by_id: dict[str, list[dict[str, Any]]] = {}
+    for entry in idx.get("sources", []):
+        source_id = str(entry.get("id", "")).strip()
+        if source_id:
+            index_entries_by_id.setdefault(source_id, []).append(entry)
+
+    report_entries: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for citation in _report_citation_lines(report_text):
+        line_warnings = list(citation["malformed_refs"])
+        if not citation["source_ids"]:
+            warnings.append(f"report line {citation['line_number']} has malformed citations only")
+        sources: list[dict[str, Any]] = []
+        for source_id in citation["source_ids"]:
+            matches = index_entries_by_id.get(source_id, [])
+            if not matches:
+                line_warnings.append(f"{source_id} is missing from sources/index.json")
+                continue
+            entry = matches[0]
+            file_relpath = str(entry.get("file", "")).strip()
+            source_disk = scanned["files_by_relpath"].get(file_relpath)
+            source_text = _read_file(source_disk["path"]) if source_disk else ""
+            excerpts, needs_manual_review = _excerpt_candidates(citation["text"], source_text)
+            source_warnings: list[str] = []
+            review_status = _review_status_for_entry(entry)
+            if review_status == "pending":
+                source_warnings.append("source review is still pending")
+            elif review_status == "discarded":
+                source_warnings.append("source is marked discarded")
+            if bool(entry.get("snippet_only")):
+                source_warnings.append("source is snippet-only")
+            if str(entry.get("error", "")).strip():
+                source_warnings.append(f"source recorded error: {entry['error']}")
+            if source_id not in findings_src_refs:
+                source_warnings.append("report citation bypasses findings")
+            if needs_manual_review:
+                source_warnings.append("no lexical excerpt match found")
+            quality_metadata = _quality_metadata_for_entry(entry)
+            sources.append(
+                {
+                    "source_id": source_id,
+                    "file": file_relpath,
+                    "url": str(entry.get("url", "")).strip(),
+                    "review_status": review_status,
+                    "quality_tier": quality_metadata["quality_tier"],
+                    "quality_reasons": quality_metadata["quality_reasons"],
+                    "quality_requires_corroboration": quality_metadata["quality_requires_corroboration"],
+                    "warnings": source_warnings,
+                    "excerpts": excerpts,
+                    "needs_manual_review": needs_manual_review,
+                }
+            )
+        report_entries.append(
+            {
+                "line_number": citation["line_number"],
+                "text": citation["text"],
+                "source_ids": citation["source_ids"],
+                "warnings": line_warnings,
+                "sources": sources,
+            }
+        )
+
+    artifact_path = output_path or (workspace / "outputs" / "citation-check.md")
+    artifact_written = False
+    if not json_only:
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(
+            _build_citation_check_markdown(workspace=workspace, report_entries=report_entries),
+            encoding="utf-8",
+        )
+        artifact_written = True
+
+    return {
+        "workspace": str(workspace),
+        "citation_check_path": str(artifact_path),
+        "artifact_written": artifact_written,
+        "report_citation_count": len(report_entries),
+        "report_entries": report_entries,
+        "warnings": warnings,
+        "recovered_transactions": recovery.get("recovered", []),
+        "discarded_staged_transactions": recovery.get("discarded", []),
+    }
+
+
 # ---------------------------------------------------------------------------
 # delete
 # ---------------------------------------------------------------------------
@@ -619,7 +914,7 @@ def cmd_delete(workspace: Path, force: bool) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def cmd_audit(workspace: Path) -> dict:
+def cmd_audit(workspace: Path, *, strict_traceability: bool = False) -> dict:
     """Verify the traceability chain: src > fnd > ins > report.
 
     Checks (per requirements.md section 16.3.1):
@@ -731,8 +1026,15 @@ def cmd_audit(workspace: Path) -> dict:
     invalid_src_in_findings = findings_src_refs - valid_source_ids
     invalid_fnd_in_summary = summary_fnd_refs - known_fnd_ids
     invalid_src_in_report = report_src_refs - valid_source_ids
+    report_sources_not_in_findings = report_src_refs - findings_src_refs
     orphaned_src = known_src_ids - (findings_src_refs | report_src_refs)
     orphaned_breakdown = _classify_orphaned_sources(orphaned_src, index_entries_by_id)
+    report_quality_entries = [
+        index_entries_by_id[source_id][0]
+        for source_id in sorted(report_src_refs.intersection(known_src_ids))
+        if index_entries_by_id.get(source_id)
+    ]
+    report_evidence_quality_warning = _report_evidence_quality_warning(report_quality_entries)
 
     highest_src = max((int(source_id.split("_", 1)[1]) for source_id in known_src_ids), default=0)
     source_counter = _counter_drift(idx.get("next_id", 1), highest_src)
@@ -755,6 +1057,11 @@ def cmd_audit(workspace: Path) -> dict:
         not counter["valid"]
         for counter in (source_counter, finding_counter, insight_counter)
     )
+    strict_traceability_failures = {
+        "report_sources_not_in_findings": sorted(report_sources_not_in_findings),
+        "pending_orphaned_sources": orphaned_breakdown["pending"] if strict_traceability else [],
+        "used_but_uncited_sources": orphaned_breakdown["used_but_uncited"] if strict_traceability else [],
+    }
     hard_failure_count = (
         invalid_reference_count
         + malformed_reference_count
@@ -766,9 +1073,17 @@ def cmd_audit(workspace: Path) -> dict:
         + len(frontmatter_id_mismatches)
         + counter_drift_count
     )
-    if hard_failure_count:
+    strict_failure_count = 0
+    if strict_traceability:
+        strict_failure_count = (
+            len(report_sources_not_in_findings)
+            + len(orphaned_breakdown["pending"])
+            + len(orphaned_breakdown["used_but_uncited"])
+        )
+
+    if hard_failure_count or strict_failure_count:
         status = "error"
-    elif orphaned_src or scope_limits["exceeded"]:
+    elif report_sources_not_in_findings or orphaned_src or scope_limits["exceeded"] or report_evidence_quality_warning:
         status = "warning"
     else:
         status = "ok"
@@ -777,9 +1092,33 @@ def cmd_audit(workspace: Path) -> dict:
     if not finding_counter["valid"] or not insight_counter["valid"]:
         remediation["sync_counters_command"] = f"python scripts/workspace_info.py sync-counters {workspace}"
 
+    summary = _build_summary(
+        status=status,
+        invalid_reference_count=invalid_reference_count,
+        malformed_reference_count=malformed_reference_count,
+        malformed_identifier_count=malformed_identifier_count,
+        unindexed_files=len(unindexed_files),
+        missing_index_files=len(missing_index_files),
+        duplicate_ids=len(scanned["duplicate_ids"]) + len(duplicate_index_ids),
+        counter_drift_count=counter_drift_count,
+        orphaned_sources=len(orphaned_src),
+        scope_overrun_count=scope_limits["over_by"],
+    )
+    if report_sources_not_in_findings:
+        suffix = (
+            f"{len(report_sources_not_in_findings)} report-only source citation(s) bypass findings"
+        )
+        if summary.startswith("OK:"):
+            summary = f"WARNING: {suffix}"
+        else:
+            summary = f"{summary}; {suffix}"
+    if report_evidence_quality_warning:
+        summary = f"{summary}; low-quality report evidence mix detected"
+
     return {
         "workspace": str(workspace),
         "status": status,
+        "strict_traceability": strict_traceability,
         "sources_in_index": len(known_src_ids),
         "source_files_on_disk": len(scanned["files_by_relpath"]),
         "findings_count": len(known_fnd_ids),
@@ -787,9 +1126,11 @@ def cmd_audit(workspace: Path) -> dict:
         "sources_cited_in_findings": len(findings_src_refs),
         "sources_cited_in_report": len(report_src_refs),
         "findings_referenced_in_summary": len(summary_fnd_refs),
+        "report_sources_not_in_findings": sorted(report_sources_not_in_findings),
         "orphaned_sources": sorted(orphaned_src),
         "orphaned_source_breakdown": orphaned_breakdown,
         "source_review_counts": _review_status_counts(index_entries),
+        "source_quality_tier_counts": _quality_tier_counts(index_entries),
         "scope_limits": scope_limits,
         "filesystem_index_mismatches": {
             "unindexed_files": unindexed_files,
@@ -819,24 +1160,22 @@ def cmd_audit(workspace: Path) -> dict:
             "next_finding_id": finding_counter,
             "next_insight_id": insight_counter,
         },
+        "strict_traceability_failures": strict_traceability_failures,
+        "report_cited_source_quality_tiers": [
+            {
+                "source_id": str(entry.get("id", "")).strip(),
+                **_quality_metadata_for_entry(entry),
+            }
+            for entry in report_quality_entries
+        ],
+        "report_evidence_quality_warning": report_evidence_quality_warning,
         "id_counter_valid": source_counter["valid"],
         "id_counter_expected": source_counter["expected"],
         "id_counter_actual": source_counter["actual"],
         "remediation": remediation,
         "recovered_transactions": recovery.get("recovered", []),
         "discarded_staged_transactions": recovery.get("discarded", []),
-        "summary": _build_summary(
-            status=status,
-            invalid_reference_count=invalid_reference_count,
-            malformed_reference_count=malformed_reference_count,
-            malformed_identifier_count=malformed_identifier_count,
-            unindexed_files=len(unindexed_files),
-            missing_index_files=len(missing_index_files),
-            duplicate_ids=len(scanned["duplicate_ids"]) + len(duplicate_index_ids),
-            counter_drift_count=counter_drift_count,
-            orphaned_sources=len(orphaned_src),
-            scope_overrun_count=scope_limits["over_by"],
-        ),
+        "summary": summary,
     }
 
 
@@ -867,6 +1206,21 @@ def build_parser() -> argparse.ArgumentParser:
     audit_p = sub.add_parser("audit", help="Verify traceability chain.")
     audit_p.add_argument("name", help="Workspace name or path.")
     audit_p.add_argument("--path", default="./workspaces", help="Parent directory (default: ./workspaces).")
+    audit_p.add_argument(
+        "--strict-traceability",
+        action="store_true",
+        help="Fail when report citations bypass findings or cited-source review is unresolved.",
+    )
+
+    verify_p = sub.add_parser("verify-citations", help="Build a manual citation verification checklist.")
+    verify_p.add_argument("name", help="Workspace name or path.")
+    verify_p.add_argument("--path", default="./workspaces", help="Parent directory (default: ./workspaces).")
+    verify_p.add_argument("--output", default=None, help="Write the Markdown checklist to this path.")
+    verify_p.add_argument(
+        "--json-only",
+        action="store_true",
+        help="Do not write citation-check.md; print JSON payload only.",
+    )
 
     sync_p = sub.add_parser("sync-counters", help="Synchronize finding/insight counters from note contents.")
     sync_p.add_argument("name", help="Workspace name or path.")
@@ -905,7 +1259,19 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "audit":
         parent = workspace_path(args.path)
         workspace = _resolve_workspace(args.name, parent)
-        result = cmd_audit(workspace)
+        result = cmd_audit(workspace, strict_traceability=bool(args.strict_traceability))
+        emit_ok(result)
+    elif args.command == "verify-citations":
+        parent = workspace_path(args.path)
+        workspace = _resolve_workspace(args.name, parent)
+        if not (workspace / "config.json").exists():
+            emit_error("workspace_not_found", f"workspace not found: {args.name} (looked in {parent})")
+        output_path = Path(args.output).resolve() if args.output else None
+        result = cmd_verify_citations(
+            workspace,
+            output_path=output_path,
+            json_only=bool(args.json_only),
+        )
         emit_ok(result)
     elif args.command == "sync-counters":
         parent = workspace_path(args.path)

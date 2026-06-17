@@ -53,12 +53,14 @@ for p in (str(_REPO_ROOT), str(_SCRIPTS_DIR)):
 
 from _common import (
     WorkspaceStateCoordinator,
+    classify_source_quality,
     emit_error,
     emit_ok,
     emit_partial,
     load_source_index,
     load_workspace_config,
     render_frontmatter,
+    significant_terms,
     source_id_for,
     utcnow_iso,
     word_count,
@@ -77,6 +79,25 @@ log = logging.getLogger(__name__)
 
 # arXiv's official rate limit guideline
 ARXIV_DELAY_SECONDS = 3.5
+BIOMEDICAL_QUERY_KEYWORDS = {
+    "adverse",
+    "biomedical",
+    "clinical",
+    "contraindication",
+    "dosage",
+    "drug",
+    "human",
+    "medication",
+    "pharmacology",
+    "pubmed",
+    "randomized",
+    "safety",
+    "therapy",
+    "trial",
+}
+BIOMEDICAL_ARXIV_CATEGORY_PREFIXES = {
+    "q-bio",
+}
 
 
 def default_cache_dir(workspace: Path) -> Path:
@@ -147,6 +168,37 @@ def _date_to_iso(dt: Any) -> str:
     return str(dt)[:10]
 
 
+def _is_biomedical_query(query: str) -> bool:
+    """Return True when the query looks biomedical or clinical."""
+    tokens = set(significant_terms(query))
+    return any(token in tokens for token in BIOMEDICAL_QUERY_KEYWORDS)
+
+
+def _arxiv_category_fits_biomedical(category: str | None) -> bool:
+    """Return True when an arXiv category is plausibly biomedical."""
+    if not category:
+        return False
+    category_name = category.strip().lower()
+    return any(category_name.startswith(prefix) for prefix in BIOMEDICAL_ARXIV_CATEGORY_PREFIXES)
+
+
+def _term_matches(text: str, required_terms: list[str]) -> bool:
+    """Return True when every required phrase appears in the candidate text."""
+    haystack = text.lower()
+    return all(term.lower() in haystack for term in required_terms)
+
+
+def _query_overlap(query: str, title: str, summary: str) -> tuple[int, list[str]]:
+    """Return overlap count and tokens between the query and result text."""
+    query_terms = significant_terms(query)
+    if not query_terms:
+        return 0, []
+    query_term_set = set(query_terms)
+    candidate_terms = set(significant_terms(f"{title} {summary}"))
+    overlap = sorted(query_term_set.intersection(candidate_terms))
+    return len(overlap), overlap
+
+
 def run_arxiv_search(
     query: str,
     workspace: Path,
@@ -156,6 +208,8 @@ def run_arxiv_search(
     use_cache: bool,
     clear_cache_first: bool,
     cache_dir: Path,
+    must_contain_terms: list[str] | None = None,
+    min_query_token_overlap: int = 0,
 ) -> dict:
     """Execute the full arXiv search-and-persist flow. Returns a status dict."""
     if not workspace.exists() or not (workspace / "config.json").exists():
@@ -164,8 +218,17 @@ def run_arxiv_search(
             f"workspace not found at {workspace}. Run init_workspace.py first.",
         )
 
-    initial_config = load_workspace_config(workspace)
+    load_workspace_config(workspace)
     initial_index = load_source_index(workspace)
+    must_contain_terms = [term.strip() for term in (must_contain_terms or []) if term.strip()]
+    if min_query_token_overlap < 0:
+        emit_error("invalid_overlap", "--min-query-token-overlap must be >= 0")
+    warnings: list[str] = []
+    if _is_biomedical_query(query) and not _arxiv_category_fits_biomedical(category):
+        warnings.append(
+            "Biomedical or clinical query detected. arXiv may be a poor primary source here; "
+            f"prefer PubMed via `python scripts/search_pubmed.py \"{query}\" --workspace {workspace}`."
+        )
 
     if clear_cache_first and cache_dir.exists():
         removed = clear_cache(cache_dir)
@@ -177,10 +240,16 @@ def run_arxiv_search(
     cache_dir.mkdir(parents=True, exist_ok=True)
     raw_results: list[dict] | None = None
     cache_provider = f"arxiv"
+    cache_params: dict[str, Any] = {
+        "category": category,
+        "sort_by": sort_by,
+    }
+    if must_contain_terms:
+        cache_params["must_contain"] = "|".join(must_contain_terms)
+    if min_query_token_overlap > 0:
+        cache_params["min_query_token_overlap"] = min_query_token_overlap
     if use_cache:
-        raw_results = load_cache(
-            cache_dir, cache_provider, query, max_results, category=category, sort_by=sort_by
-        )
+        raw_results = load_cache(cache_dir, cache_provider, query, max_results, **cache_params)
         if raw_results is not None:
             log.info("using cached arxiv results: %d items", len(raw_results))
         else:
@@ -241,10 +310,7 @@ def run_arxiv_search(
         # should populate the cache so future reproducible runs can
         # replay it. This decouples cache writes from the --use-cache
         # flag, matching the contract in requirements.md section 10.2.
-        save_cache(
-            cache_dir, cache_provider, query, max_results, raw_results,
-            category=category, sort_by=sort_by,
-        )
+        save_cache(cache_dir, cache_provider, query, max_results, raw_results, **cache_params)
 
     initial_arxiv_ids = {
         str(source.get("arxiv_id", "")).strip()
@@ -253,6 +319,8 @@ def run_arxiv_search(
     }
     candidate_results: list[dict[str, Any]] = []
     skipped_preexisting = 0
+    filtered_out = 0
+    low_overlap_marked = 0
     seen_candidate_ids: set[str] = set()
     for result in raw_results:
         arxiv_id = str(result.get("arxiv_id", "")).strip()
@@ -263,6 +331,20 @@ def run_arxiv_search(
         if arxiv_id in initial_arxiv_ids:
             skipped_preexisting += 1
             continue
+        searchable_text = f"{result.get('title', '')}\n{result.get('summary', '')}"
+        if must_contain_terms and not _term_matches(searchable_text, must_contain_terms):
+            filtered_out += 1
+            continue
+        overlap_count, overlap_terms = _query_overlap(
+            query,
+            str(result.get("title", "")),
+            str(result.get("summary", "")),
+        )
+        result["query_token_overlap"] = overlap_count
+        result["query_overlap_terms"] = overlap_terms
+        if min_query_token_overlap > 0 and overlap_count < min_query_token_overlap:
+            result["low_relevance_overlap"] = True
+            low_overlap_marked += 1
         candidate_results.append(result)
 
     added_ids: list[str] = []
@@ -310,6 +392,20 @@ def run_arxiv_search(
             body_lines.append(result.get("summary", "(no summary)"))
             body = "\n".join(body_lines)
             wc = word_count(body)
+            quality_seed: dict[str, Any] = {
+                "arxiv_id": arxiv_id,
+                "categories": result.get("categories", []),
+            }
+            if result.get("low_relevance_overlap"):
+                quality_seed["low_relevance_overlap"] = True
+            quality_metadata = classify_source_quality(
+                url=result["url"],
+                provider="arxiv",
+                search_provider="arxiv",
+                title=result["title"],
+                content_quality="low_relevance" if result.get("low_relevance_overlap") else "",
+                metadata=quality_seed,
+            )
             frontmatter: dict[str, Any] = {
                 "id": source_id,
                 "url": result["url"],
@@ -324,7 +420,13 @@ def run_arxiv_search(
                 "categories": result.get("categories", []),
                 "word_count": wc,
                 "truncated": False,
+                "query_token_overlap": result.get("query_token_overlap", 0),
+                "query_overlap_terms": result.get("query_overlap_terms", []),
             }
+            if result.get("low_relevance_overlap"):
+                frontmatter["content_quality"] = "low_relevance"
+                frontmatter["low_relevance_overlap"] = True
+            frontmatter.update(quality_metadata)
             relpath = f"papers/{source_id}.md"
             source_files.append(
                 {
@@ -347,6 +449,10 @@ def run_arxiv_search(
                     "date_published": result["date_published"],
                     "categories": result.get("categories", []),
                     "search_provider": "arxiv",
+                    "query_token_overlap": result.get("query_token_overlap", 0),
+                    "query_overlap_terms": result.get("query_overlap_terms", []),
+                    **({"content_quality": "low_relevance", "low_relevance_overlap": True} if result.get("low_relevance_overlap") else {}),
+                    **quality_metadata,
                 }
             )
             current_arxiv_ids.add(arxiv_id)
@@ -362,7 +468,12 @@ def run_arxiv_search(
                 "results_count": len(raw_results),
                 "sources_added": len(added_ids),
                 "sources_skipped": skipped_preexisting + skipped_committed,
+                "filtered_results": filtered_out,
+                "low_overlap_marked": low_overlap_marked,
+                "must_contain_terms": must_contain_terms,
+                "min_query_token_overlap": min_query_token_overlap,
                 "source_ids": added_ids,
+                "warnings": warnings,
             }
         )
         config["next_source_id"] = next_id
@@ -376,9 +487,12 @@ def run_arxiv_search(
     return {
         "sources_added": len(added_ids),
         "sources_skipped": skipped_preexisting + skipped_committed,
+        "sources_filtered": filtered_out,
+        "sources_marked_low_relevance": low_overlap_marked,
         "source_ids": added_ids,
         "workspace": str(workspace),
         "query": query,
+        "warnings": warnings,
     }
 
 
@@ -392,6 +506,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-results", type=int, default=10, help="Maximum results (default: 10).")
     parser.add_argument("--category", default=None, help="arXiv subject category (e.g., cs.AI, cs.LG).")
     parser.add_argument("--sort-by", choices=["relevance", "date"], default="relevance", help="Sort criterion (default: relevance).")
+    parser.add_argument(
+        "--must-contain",
+        action="append",
+        default=[],
+        help="Require each saved result to contain this phrase in its title or abstract. Repeatable.",
+    )
+    parser.add_argument(
+        "--min-query-token-overlap",
+        type=int,
+        default=0,
+        help="Mark saved results low-relevance when title+abstract overlaps the query by fewer than N significant tokens.",
+    )
     parser.add_argument("--use-cache", action="store_true", help="Use cached search results if present.")
     parser.add_argument("--clear-cache", action="store_true", help="Delete cached search results before running.")
     parser.add_argument("--cache-dir", default=None, help="Cache directory (default: <workspace>/.calixto/cache).")
@@ -413,6 +539,8 @@ def main(argv: list[str] | None = None) -> int:
             use_cache=args.use_cache,
             clear_cache_first=args.clear_cache,
             cache_dir=cache_dir,
+            must_contain_terms=args.must_contain,
+            min_query_token_overlap=args.min_query_token_overlap,
         )
     except SystemExit:
         raise

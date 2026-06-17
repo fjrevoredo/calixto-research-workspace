@@ -327,6 +327,27 @@ class TestWorkspaceStateCoordinator:
             },
         )
 
+    def test_validate_workspace_search_state_accepts_quality_metadata(self) -> None:
+        validate_workspace_search_state(
+            {
+                "next_source_id": 2,
+                "searches": [],
+            },
+            {
+                "next_id": 2,
+                "sources": [
+                    {
+                        "id": "src_001",
+                        "url": "https://pubmed.ncbi.nlm.nih.gov/123456/",
+                        "file": "papers/src_001.md",
+                        "quality_tier": "authoritative",
+                        "quality_reasons": ["pubmed_record"],
+                        "quality_requires_corroboration": False,
+                    },
+                ],
+            },
+        )
+
     def test_validate_workspace_search_state_rejects_invalid_review_status(self) -> None:
         with pytest.raises(ValueError, match="review_status"):
             validate_workspace_search_state(
@@ -342,6 +363,26 @@ class TestWorkspaceStateCoordinator:
                             "url": "https://example.com",
                             "file": "web/src_001.md",
                             "review_status": "maybe",
+                        },
+                    ],
+                },
+            )
+
+    def test_validate_workspace_search_state_rejects_invalid_quality_tier(self) -> None:
+        with pytest.raises(ValueError, match="quality_tier"):
+            validate_workspace_search_state(
+                {
+                    "next_source_id": 2,
+                    "searches": [],
+                },
+                {
+                    "next_id": 2,
+                    "sources": [
+                        {
+                            "id": "src_001",
+                            "url": "https://example.com",
+                            "file": "web/src_001.md",
+                            "quality_tier": "peerless",
                         },
                     ],
                 },

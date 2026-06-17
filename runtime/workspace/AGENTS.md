@@ -61,10 +61,19 @@ Recommended command style:
 ```bash
 uv run python scripts/search_web.py "your query" --workspace . --max-results 10
 uv run python scripts/search_arxiv.py "your query" --workspace . --max-results 10
+uv run python scripts/search_pubmed.py "your biomedical query" --workspace . --max-results 10
 uv run python scripts/workspace_info.py review-source . src_007 discarded --note "Low-signal landing page"
 uv run python scripts/workspace_info.py sync-counters .
-uv run python scripts/workspace_info.py audit .
+uv run python scripts/workspace_info.py audit . --strict-traceability
+uv run python scripts/workspace_info.py verify-citations .
 ```
+
+Final-report discipline:
+
+- Before handoff, either cite each still-pending source in a finding, discard it with a reason, or record the deferral explicitly in `notes/gaps.md`.
+- Run `workspace_info.py audit . --strict-traceability` before final delivery.
+- Generate `outputs/citation-check.md` with `workspace_info.py verify-citations .` and complete the manual review fields.
+- For biomedical or clinical questions, prefer `search_pubmed.py` over `search_arxiv.py`.
 
 ## Boundaries
 

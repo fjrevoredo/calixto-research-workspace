@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-17
+
+- Added `workspace_info.py audit --strict-traceability` plus `report_sources_not_in_findings` reporting so final-report citations that bypass findings, unresolved pending sources, and used-but-uncited sources can fail deliberately.
+- Added `workspace_info.py verify-citations` to generate `outputs/citation-check.md`, a deterministic manual citation-review checklist with cited report lines, source metadata, and lexical excerpt candidates.
+- Added deterministic source quality tier metadata (`quality_tier`, `quality_reasons`, `quality_requires_corroboration`) across web, arXiv, and PubMed source collection, and surfaced tier counts in workspace summaries.
+- Added `search_pubmed.py` for biomedical literature search via NCBI E-utilities, with shared workspace IDs, caching, and standalone-runtime bundling.
+- Added biomedical-topic warnings and relevance controls to `search_arxiv.py`, including `--must-contain` and `--min-query-token-overlap`.
+- Updated runtime skills, workspace docs, templates, and golden comparison metrics to require strict final-report traceability and manual citation verification for finished reports.
+
 ## 2026-06-10
 
 - Added coordinated workspace search-state commits with locking, staged transaction recovery, and validation for `config.json`, `sources/index.json`, and source markdown files.

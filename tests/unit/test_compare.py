@@ -280,3 +280,32 @@ class TestCompareCitationsAndStrict:
         assert proc.stderr == "", (
             f"on success, stderr must be silent, got: {proc.stderr!r}"
         )
+
+    def test_report_sources_through_findings_warns_when_enabled(self, tmp_path: Path) -> None:
+        run_a = tmp_path / "runA"
+        run_b = tmp_path / "runB"
+        report = "# Report\n\nClaim cites [src_001] and [src_002].\n"
+        _build_run(
+            run_a,
+            sources=["https://a.example.com/1", "https://b.example.com/2"],
+            report_text=report,
+        )
+        _build_run(
+            run_b,
+            sources=["https://a.example.com/1", "https://b.example.com/2"],
+            report_text=report,
+        )
+        findings = "## fnd_001\n**Source:** src_001\n**Fact:** grounded\n"
+        (run_a / "notes" / "findings.md").write_text(findings, encoding="utf-8")
+        (run_b / "notes" / "findings.md").write_text(findings, encoding="utf-8")
+
+        ed = self._expected_dir(tmp_path)
+        quality = json.loads((ed / "quality_checks.json").read_text(encoding="utf-8"))
+        quality["report_sources_through_findings"] = True
+        (ed / "quality_checks.json").write_text(json.dumps(quality), encoding="utf-8")
+
+        proc = _run_compare(str(run_a), str(run_b), "--expected", str(ed))
+        assert proc.returncode == 0, proc.stderr
+        out = json.loads(proc.stdout)
+        flat = [w for r in out["warnings"] for w in r["warnings"]]
+        assert any(w.get("check") == "report_sources_through_findings" for w in flat), flat

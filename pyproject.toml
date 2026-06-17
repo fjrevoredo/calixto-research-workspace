@@ -42,6 +42,7 @@ dev = [
 calixto-init = "scripts.init_workspace:main"
 calixto-search-web = "scripts.search_web:main"
 calixto-search-arxiv = "scripts.search_arxiv:main"
+calixto-search-pubmed = "scripts.search_pubmed:main"
 calixto-workspace = "scripts.workspace_info:main"
 
 [build-system]

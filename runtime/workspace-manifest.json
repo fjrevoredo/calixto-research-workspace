@@ -80,6 +80,11 @@
     },
     {
       "kind": "file",
+      "source": "scripts/search_pubmed.py",
+      "destination": "scripts/search_pubmed.py"
+    },
+    {
+      "kind": "file",
       "source": "scripts/workspace_info.py",
       "destination": "scripts/workspace_info.py"
     },

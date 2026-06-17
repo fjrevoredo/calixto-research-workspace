@@ -121,6 +121,7 @@ def analyze_run(run_dir: Path) -> dict:
     report_src_refs = {f"src_{m}" for m in SRC_ID_RE.findall(report_text)}
     findings_src_refs = {f"src_{m}" for m in SRC_ID_RE.findall(findings_text)}
     summary_fnd_refs = {f"fnd_{m}" for m in FND_ID_RE.findall(summary_text)}
+    report_sources_not_in_findings = report_src_refs - findings_src_refs
 
     finding_ids_in_findings = {
         f"fnd_{m}" for m in re.findall(r"^##\s+fnd_(\d{3,})", findings_text, re.MULTILINE)
@@ -137,6 +138,11 @@ def analyze_run(run_dir: Path) -> dict:
     # Citation coverage
     all_cited = report_src_refs | findings_src_refs
     citation_coverage = len(all_cited) / len(source_ids) if source_ids else 0.0
+    report_sources_through_findings_coverage = (
+        (len(report_src_refs) - len(report_sources_not_in_findings)) / len(report_src_refs)
+        if report_src_refs
+        else 1.0
+    )
 
     # Report sections (heuristic: lines starting with # then a section name)
     report_sections: list[str] = []
@@ -161,12 +167,14 @@ def analyze_run(run_dir: Path) -> dict:
         "report_cited_sources": sorted(report_src_refs),
         "findings_cited_sources": sorted(findings_src_refs),
         "summary_cited_findings": sorted(summary_fnd_refs),
+        "report_sources_not_in_findings": sorted(report_sources_not_in_findings),
         "invalid_refs": {
             "source_in_findings": sorted(invalid_src_in_findings),
             "source_in_report": sorted(invalid_src_in_report),
             "finding_in_summary": sorted(invalid_fnd_in_summary),
         },
         "citation_coverage": citation_coverage,
+        "report_sources_through_findings_coverage": report_sources_through_findings_coverage,
         "orphaned_sources": sorted(source_ids - all_cited),
         "id_counter_expected": next_id_expected,
         "id_counter_actual": next_id_in_index,
@@ -263,6 +271,14 @@ def check_against_expected(metrics: dict, expected: dict) -> tuple[list[dict], l
                     "check": "min_citation_coverage",
                     "expected": f">= {qc['min_citation_coverage']}",
                     "actual": round(metrics["citation_coverage"], 3),
+                }
+            )
+        if qc.get("report_sources_through_findings", False) and metrics["report_sources_not_in_findings"]:
+            warnings.append(
+                {
+                    "check": "report_sources_through_findings",
+                    "expected": "all report-cited sources also appear in findings",
+                    "actual": metrics["report_sources_not_in_findings"],
                 }
             )
         if qc.get("all_ids_valid", False):

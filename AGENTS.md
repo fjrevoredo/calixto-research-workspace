@@ -184,7 +184,8 @@ Toolkit-side scripts:
 - `scripts/init_workspace.py <name> [--path DIR]`
 - `scripts/search_web.py <query> --workspace PATH [--max-results N] ...`
 - `scripts/search_arxiv.py <query> --workspace PATH [--max-results N] ...`
-- `scripts/workspace_info.py list|show|delete|audit|sync-counters|review-source ...`
+- `scripts/search_pubmed.py <query> --workspace PATH [--max-results N] ...`
+- `scripts/workspace_info.py list|show|delete|audit|verify-citations|sync-counters|review-source ...`
 
 Notes:
 

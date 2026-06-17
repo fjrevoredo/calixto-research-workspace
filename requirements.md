@@ -106,6 +106,7 @@ research-workspace/
 │   ├── init_workspace.py         # Create workspace from template
 │   ├── search_web.py             # Search + scrape pipeline
 │   ├── search_arxiv.py           # arXiv API helper
+│   ├── search_pubmed.py          # PubMed / MEDLINE helper
 │   └── workspace_info.py         # List, inspect, delete workspaces
 │
 ├── providers/
@@ -147,6 +148,7 @@ workspaces/
     ├── scripts/
     │   ├── search_web.py
     │   ├── search_arxiv.py
+    │   ├── search_pubmed.py
     │   └── workspace_info.py
     ├── providers/
     │   ├── search/
@@ -256,7 +258,9 @@ Search arXiv for academic papers.
 ```
 python scripts/search_arxiv.py "<query>" --workspace <path> \
     [--max-results 10] \
-    [--category cs.AI]
+    [--category cs.AI] \
+    [--must-contain "exact phrase"] \
+    [--min-query-token-overlap 2]
 ```
 
 - Queries arXiv API (rate limited: 1 req/3s)
@@ -265,8 +269,28 @@ python scripts/search_arxiv.py "<query>" --workspace <path> \
 - Updates `sources/index.json` with source ID and metadata
 - Optionally downloads PDFs
 - Deduplicates by arXiv ID
+- Warns when a likely biomedical query is sent to arXiv without a fitting `q-bio` category
+- `--must-contain` filters obviously irrelevant lexical matches before they consume source slots
+- `--min-query-token-overlap` marks low-overlap saved results as corroboration-required instead of silently treating them as normal evidence
 
-### 4.4 `workspace_info.py`
+### 4.4 `search_pubmed.py`
+
+Search PubMed / MEDLINE for biomedical papers.
+
+```
+python scripts/search_pubmed.py "<query>" --workspace <path> \
+    [--max-results 10] \
+    [--email you@example.com] \
+    [--api-key <key>]
+```
+
+- Uses NCBI E-utilities over HTTPS; no API key is required for basic use
+- Saves paper metadata and abstracts as markdown in `sources/papers/src_NNN.md`
+- Updates `sources/index.json` with shared workspace `src_NNN` IDs
+- Stores PubMed ID, journal, authors, publication date, DOI, and abstract when available
+- Uses the same cache conventions as the other search scripts
+
+### 4.5 `workspace_info.py`
 
 Manage existing workspaces.
 
@@ -274,13 +298,16 @@ Manage existing workspaces.
 python scripts/workspace_info.py list [--path ./workspaces]
 python scripts/workspace_info.py show <name> [--path ./workspaces]
 python scripts/workspace_info.py delete <name> [--path ./workspaces]
-python scripts/workspace_info.py audit <name> [--path ./workspaces]
+python scripts/workspace_info.py audit <name> [--path ./workspaces] [--strict-traceability]
+python scripts/workspace_info.py verify-citations <name> [--path ./workspaces] [--output PATH] [--json-only]
 ```
 
 - `list`: shows all workspaces with source counts and last modified date
 - `show`: displays workspace summary (question, sources, searches done)
 - `delete`: removes a workspace folder
 - `audit`: verifies traceability chain integrity (all IDs valid, no orphans, references resolve)
+- `audit --strict-traceability`: fails when report citations bypass findings, cited sources remain pending, or used sources are uncited
+- `verify-citations`: generates `outputs/citation-check.md`, a deterministic manual citation-review checklist with report lines, cited source metadata, and candidate source excerpts
 
 ---
 
@@ -357,11 +384,11 @@ See `skills/integrate-tool.md` for instructions on:
 The main skill. Teaches any agent how to perform research from start to finish:
 
 1. **Initialize**: Create workspace, define research question and scope
-2. **Search**: Run web/paper searches, collect sources (scripts assign src_NNN IDs)
+2. **Search**: Run web/paper searches with the right scholarly provider, collect sources (scripts assign src_NNN IDs)
 3. **Evaluate**: Assess source quality, identify gaps
 4. **Extract**: Agent reads sources and extracts key facts, assigning fnd_NNN IDs and referencing source IDs
 5. **Synthesize**: Write summary with ins_NNN IDs, referencing finding IDs, connecting findings
-6. **Report**: Generate final markdown report with source ID citations
+6. **Report**: Generate final markdown report with source ID citations, strict traceability audit, and citation-check artifact
 7. **Iterate**: Refine, expand, or start over
 
 Must work for any topic: consumer advice, technical research, academic literature, competitive analysis, etc.
@@ -372,7 +399,7 @@ Must work for any topic: consumer advice, technical research, academic literatur
 
 ### 6.2 `literature-review.md`: Academic Variant
 
-Focused on academic research: heavier on arXiv/Semantic Scholar, citation tracking, methodology assessment, and structured literature review format.
+Focused on academic research: domain-aware scholarly-provider selection, citation tracking, methodology assessment, and structured literature review format. arXiv stays primary for CS/math/physics; PubMed is preferred for biomedical and clinical questions.
 
 ### 6.3 `create-skill.md`: Meta-Skill
 
@@ -608,6 +635,10 @@ search_provider: duckduckgo
 query: "original search query"
 word_count: 1523
 truncated: false
+quality_tier: scholarly
+quality_reasons:
+  - scholarly_record
+quality_requires_corroboration: false
 ---
 
 # Article Title
@@ -665,13 +696,17 @@ Tracks all collected sources to prevent duplicates:
       "url_normalized": "example.com/article",
       "added_at": "2025-01-15T10:30:00Z",
       "query": "original search query",
-      "word_count": 1523
+      "word_count": 1523,
+      "quality_tier": "scholarly",
+      "quality_reasons": ["scholarly_record"],
+      "quality_requires_corroboration": false
     }
   ]
 }
 ```
 
 The `next_id` field tracks the next available source ID. Scripts increment this when adding new sources. The `url_normalized` field strips protocol, www, trailing slashes, and query params for dedup matching.
+`quality_tier`, `quality_reasons`, and `quality_requires_corroboration` are deterministic triage metadata, not semantic proof.
 
 ### 11.4 Findings (`notes/findings.md`)
 
@@ -703,6 +738,17 @@ Synthesized insights with insight IDs and finding references:
 **Based on:** fnd_003, fnd_004, fnd_007
 **Insight:** The GPU market in 2025 is segmented into three clear tiers under $500...
 ```
+
+### 11.6 Citation Check (`outputs/citation-check.md`)
+
+Generated by `workspace_info.py verify-citations`.
+
+- Lists each report line that cites one or more `src_NNN` IDs
+- Resolves cited source file paths, review status, and quality tier metadata
+- Includes short lexical-overlap excerpts from the cited source files
+- Leaves verification status and notes blank for manual completion
+
+This artifact is deterministic and file-based. It prepares a semantic review pass; it does not claim a citation is correct by itself.
 
 ---
 

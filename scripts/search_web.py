@@ -59,6 +59,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 from _common import (
     WorkspaceStateCoordinator,
+    classify_source_quality,
     emit_error,
     emit_ok,
     emit_partial,
@@ -409,6 +410,19 @@ def prepare_candidate_source(
         word_count_value = word_count(body)
         extra_metadata["truncated"] = True
         extra_metadata["original_word_count"] = original_wc
+
+    quality_metadata = classify_source_quality(
+        url=url,
+        provider=scrape_provider_name if do_scrape else "snippet_only",
+        search_provider=search_provider_name,
+        title=title,
+        content_quality=str(extra_metadata.get("content_quality", "")),
+        low_signal=bool(extra_metadata.get("low_signal")),
+        snippet_only=bool(extra_metadata.get("snippet_only")),
+        error=str(extra_metadata.get("error", "")),
+        metadata=extra_metadata,
+    )
+    extra_metadata.update(quality_metadata)
 
     prepared["title"] = title
     prepared["body"] = body

@@ -1,6 +1,9 @@
 # Report
 
 Final research report. Cite sources inline using the format `[src_NNN]`.
+Before final handoff, run `workspace_info.py audit . --strict-traceability`
+and `workspace_info.py verify-citations .`, then complete the generated
+`outputs/citation-check.md` review notes.
 
 ## Structure
 
