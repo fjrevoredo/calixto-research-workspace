@@ -221,10 +221,21 @@ User query
 Create a new standalone research workspace snapshot.
 
 ``` 
-uv run python scripts/init_workspace.py <name> [--path ./workspaces]
+uv run python scripts/init_workspace.py <name> [--path ./workspaces] \
+    [--check-updates | --skip-update-check] \
+    [--require-update-check] \
+    [--update-before-create]
 ```
 
 - Creates `workspaces/<name>/` as a standalone runtime snapshot
+- In interactive terminals, checks whether the toolkit root is behind the
+  remote default branch before creating the workspace
+- `--skip-update-check` suppresses the interactive freshness check
+- `--check-updates` forces the freshness check in non-interactive runs
+- `--require-update-check` fails before workspace creation if the check cannot
+  be completed
+- `--update-before-create` prints the exact installer update command and exits
+  without creating a workspace when the toolkit is behind
 - Copies bundled scripts, providers, skills, setup helpers, and seed state files
 - Writes explicit workspace metadata into `config.json`
 - Prints structured JSON including the workspace path and runtime metadata
@@ -665,6 +676,9 @@ quality_requires_corroboration: false
     "scrape": "crawl4ai",
     "papers": "arxiv"
   },
+  "toolkit_commit_created_with": "abc123def4567890abc123def4567890abc123de",
+  "toolkit_build_number_created_with": 42,
+  "toolkit_ref_created_with": "master",
   "searches": [
     {
       "query": "search query used",
@@ -680,6 +694,10 @@ quality_requires_corroboration: false
 ```
 
 The `next_source_id`, `next_finding_id`, and `next_insight_id` fields track the next available ID for each type. Scripts and the agent increment these when creating new items.
+`toolkit_commit_created_with` is the authoritative toolkit identity for the
+workspace snapshot. `toolkit_build_number_created_with` is the git commit-count
+build number for that checkout, and `toolkit_ref_created_with` records the
+local symbolic ref when available.
 
 ### 11.3 Deduplication Registry (`sources/index.json`)
 

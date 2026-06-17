@@ -2,6 +2,7 @@
 
 ## 2026-06-17
 
+- Added a pre-create toolkit freshness check to `scripts/init_workspace.py`, including interactive update prompts, non-interactive control flags, and git-derived toolkit commit/build metadata stamped into new workspace `config.json` files.
 - Added `workspace_info.py audit --strict-traceability` plus `report_sources_not_in_findings` reporting so final-report citations that bypass findings, unresolved pending sources, and used-but-uncited sources can fail deliberately.
 - Added `workspace_info.py verify-citations` to generate `outputs/citation-check.md`, a deterministic manual citation-review checklist with cited report lines, source metadata, and lexical excerpt candidates.
 - Added deterministic source quality tier metadata (`quality_tier`, `quality_reasons`, `quality_requires_corroboration`) across web, arXiv, and PubMed source collection, and surfaced tier counts in workspace summaries.

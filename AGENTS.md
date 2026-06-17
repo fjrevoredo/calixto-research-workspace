@@ -99,6 +99,10 @@ curl -fsSL https://raw.githubusercontent.com/fjrevoredo/calixto-research-workspa
 irm https://raw.githubusercontent.com/fjrevoredo/calixto-research-workspace/master/install.ps1 | iex
 ```
 
+These one-line examples pin `master` because GitHub raw URLs require a concrete
+branch name. When the installer runs locally without `--branch`, it follows the
+repository default branch.
+
 Running the same installer command in an existing toolkit checkout updates the
 toolkit root. Existing workspaces under `workspaces/` are left untouched.
 
@@ -128,6 +132,13 @@ Generate a new standalone workspace snapshot:
 ```bash
 uv run python scripts/init_workspace.py my-research-topic
 ```
+
+By default in an interactive terminal, `init_workspace.py` checks whether the
+toolkit root is behind the repository default branch before copying the runtime
+bundle. Use `--skip-update-check` to suppress that prompt, `--check-updates`
+to force the check in automation, `--require-update-check` to fail when the
+check cannot complete, or `--update-before-create` to print the exact installer
+update command and exit before any workspace is created.
 
 This creates `workspaces/my-research-topic/` with:
 

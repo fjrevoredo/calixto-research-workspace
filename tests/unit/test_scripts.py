@@ -12,6 +12,7 @@ import os
 import shutil
 import subprocess
 import sys
+from typing import Any
 from pathlib import Path
 
 import pytest
@@ -101,6 +102,9 @@ class TestInitWorkspace:
         assert workspace.joinpath("skills", "deep-research", "SKILL.md").exists()
         assert out["workspace_layout"] == "standalone"
         assert Path(out["runtime_manifest"]).name == "workspace-manifest.json"
+        assert "toolkit_commit_created_with" in out
+        assert "toolkit_build_number_created_with" in out
+        assert "toolkit_ref_created_with" in out
 
     def test_fresh_workspace_audit_is_clean(self, tmp_path: Path) -> None:
         run_script(
@@ -153,6 +157,9 @@ class TestInitWorkspace:
         assert cfg["runtime_manifest_version"] == 1
         assert cfg["runtime_bundle_version"]
         assert cfg["toolkit_version_created_with"]
+        assert "toolkit_commit_created_with" in cfg
+        assert "toolkit_build_number_created_with" in cfg
+        assert "toolkit_ref_created_with" in cfg
         assert "scope" in cfg
         assert "providers" in cfg
         assert "next_source_id" in cfg
@@ -181,6 +188,7 @@ class TestInitWorkspace:
             "skills/integrate-tool",
             "scripts/init_workspace.py",
             "scripts/installer_core.py",
+            "scripts/toolkit_git.py",
         ):
             assert not workspace.joinpath(unexpected).exists(), unexpected
 
@@ -222,6 +230,308 @@ class TestInitWorkspace:
         meta, _ = parse_frontmatter_helper(source_file.read_text(encoding="utf-8"))
         assert meta["url"] == "https://example.com/cached"
         assert not (copied_workspace / "scripts" / "init_workspace.py").exists()
+        assert not (copied_workspace / "scripts" / "toolkit_git.py").exists()
+
+
+class TestToolkitGit:
+    @staticmethod
+    def _completed(
+        args: list[str],
+        *,
+        returncode: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+    ) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(args=args, returncode=returncode, stdout=stdout, stderr=stderr)
+
+    def test_build_metadata_helpers_return_git_values(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import toolkit_git
+
+        def fake_run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str] | None:
+            if args == ("rev-parse", "HEAD"):
+                return self._completed(["git", *args], stdout="abc123def456\n")
+            if args == ("rev-list", "--count", "HEAD"):
+                return self._completed(["git", *args], stdout="42\n")
+            if args == ("symbolic-ref", "--short", "-q", "HEAD"):
+                return self._completed(["git", *args], stdout="master\n")
+            raise AssertionError(f"unexpected git args: {args}")
+
+        monkeypatch.setattr(toolkit_git, "_run_git", fake_run_git)
+
+        assert toolkit_git.toolkit_commit() == "abc123def456"
+        assert toolkit_git.toolkit_build_number() == 42
+        assert toolkit_git.toolkit_ref_name() == "master"
+        assert toolkit_git.toolkit_build_metadata() == {
+            "toolkit_commit_created_with": "abc123def456",
+            "toolkit_build_number_created_with": 42,
+            "toolkit_ref_created_with": "master",
+        }
+
+    def test_build_metadata_helpers_degrade_when_git_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import toolkit_git
+
+        monkeypatch.setattr(toolkit_git, "_run_git", lambda *args, check=True: None)
+
+        assert toolkit_git.toolkit_commit() is None
+        assert toolkit_git.toolkit_build_number() is None
+        assert toolkit_git.toolkit_ref_name() is None
+
+    def test_check_toolkit_freshness_reports_behind(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import toolkit_git
+
+        local_sha = "1111111111111111111111111111111111111111"
+        remote_sha = "2222222222222222222222222222222222222222"
+
+        def fake_run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str] | None:
+            mapping: dict[tuple[str, ...], subprocess.CompletedProcess[str]] = {
+                ("rev-parse", "HEAD"): self._completed(["git", *args], stdout=f"{local_sha}\n"),
+                ("rev-list", "--count", "HEAD"): self._completed(["git", *args], stdout="10\n"),
+                ("symbolic-ref", "--short", "-q", "HEAD"): self._completed(["git", *args], stdout="master\n"),
+                ("remote", "get-url", "origin"): self._completed(
+                    ["git", *args],
+                    stdout="git@github.com:fjrevoredo/calixto-research-workspace.git\n",
+                ),
+                ("ls-remote", "--symref", "origin", "HEAD"): self._completed(
+                    ["git", *args],
+                    stdout=f"ref: refs/heads/master HEAD\n{remote_sha}\tHEAD\n",
+                ),
+                ("rev-parse", "refs/remotes/origin/master"): self._completed(
+                    ["git", *args], returncode=1, stderr="unknown revision\n"
+                ),
+                ("cat-file", "-e", f"{remote_sha}^{{commit}}"): self._completed(["git", *args]),
+                ("rev-list", "--count", remote_sha): self._completed(["git", *args], stdout="12\n"),
+                ("merge-base", "--is-ancestor", local_sha, remote_sha): self._completed(
+                    ["git", *args], returncode=0
+                ),
+                ("merge-base", "--is-ancestor", remote_sha, local_sha): self._completed(
+                    ["git", *args], returncode=1
+                ),
+                ("rev-list", "--count", f"{local_sha}..{remote_sha}"): self._completed(
+                    ["git", *args], stdout="2\n"
+                ),
+            }
+            key = tuple(args)
+            if key not in mapping:
+                raise AssertionError(f"unexpected git args: {args}")
+            return mapping[key]
+
+        monkeypatch.setattr(toolkit_git, "_run_git", fake_run_git)
+
+        freshness = toolkit_git.check_toolkit_freshness()
+        assert freshness["status"] == "behind"
+        assert freshness["behind_by"] == 2
+        assert freshness["default_branch"] == "master"
+        assert freshness["installer_repo_url"] == "https://github.com/fjrevoredo/calixto-research-workspace.git"
+        assert freshness["latest_build_number"] == 12
+
+    def test_check_toolkit_freshness_handles_remote_commit_not_in_local_history(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import toolkit_git
+
+        local_sha = "1111111111111111111111111111111111111111"
+        remote_sha = "2222222222222222222222222222222222222222"
+
+        def fake_run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str] | None:
+            mapping: dict[tuple[str, ...], subprocess.CompletedProcess[str]] = {
+                ("rev-parse", "HEAD"): self._completed(["git", *args], stdout=f"{local_sha}\n"),
+                ("rev-list", "--count", "HEAD"): self._completed(["git", *args], stdout="10\n"),
+                ("symbolic-ref", "--short", "-q", "HEAD"): self._completed(["git", *args], stdout="master\n"),
+                ("remote", "get-url", "origin"): self._completed(
+                    ["git", *args],
+                    stdout="git@github.com:fjrevoredo/calixto-research-workspace.git\n",
+                ),
+                ("ls-remote", "--symref", "origin", "HEAD"): self._completed(
+                    ["git", *args],
+                    stdout=f"ref: refs/heads/master HEAD\n{remote_sha}\tHEAD\n",
+                ),
+                ("cat-file", "-e", f"{remote_sha}^{{commit}}"): self._completed(
+                    ["git", *args], returncode=1, stderr="missing\n"
+                ),
+                ("rev-parse", "refs/remotes/origin/HEAD"): self._completed(
+                    ["git", *args], returncode=1, stderr="unknown revision\n"
+                ),
+                ("rev-parse", "refs/remotes/origin/master"): self._completed(
+                    ["git", *args], returncode=1, stderr="unknown revision\n"
+                ),
+            }
+            key = tuple(args)
+            if key not in mapping:
+                raise AssertionError(f"unexpected git args: {args}")
+            return mapping[key]
+
+        monkeypatch.setattr(toolkit_git, "_run_git", fake_run_git)
+
+        freshness = toolkit_git.check_toolkit_freshness()
+        assert freshness["status"] == "remote_newer_unknown_relationship"
+
+
+class TestInitWorkspaceUpdateChecks:
+    def test_noninteractive_default_skips_update_check(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import init_workspace
+
+        def fail_if_called() -> dict[str, Any]:
+            raise AssertionError("update check should not run by default in non-interactive mode")
+
+        monkeypatch.setattr(init_workspace, "is_interactive_terminal", lambda: False)
+        monkeypatch.setattr(init_workspace, "check_toolkit_freshness", fail_if_called)
+
+        rc = init_workspace.main(["skip-default", "--path", str(tmp_path)])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert json.loads(captured.out)["status"] == "ok"
+        assert captured.err == ""
+        assert (tmp_path / "skip-default" / "config.json").exists()
+
+    def test_interactive_decline_continues_workspace_creation(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import init_workspace
+
+        monkeypatch.setattr(init_workspace, "is_interactive_terminal", lambda: True)
+        monkeypatch.setattr(init_workspace, "_open_console_stream", lambda: None)
+        monkeypatch.setattr(
+            init_workspace,
+            "check_toolkit_freshness",
+            lambda: {
+                "status": "behind",
+                "local_commit": "1111111111111111111111111111111111111111",
+                "local_build_number": 10,
+                "latest_commit": "2222222222222222222222222222222222222222",
+                "latest_build_number": 12,
+                "behind_by": 2,
+                "default_branch": "master",
+                "installer_repo_url": "https://github.com/fjrevoredo/calixto-research-workspace.git",
+            },
+        )
+        monkeypatch.setattr(init_workspace, "_read_prompt", lambda prompt="": "n")
+
+        rc = init_workspace.main(["interactive-decline", "--path", str(tmp_path)])
+        captured = capsys.readouterr()
+        assert rc == 0
+        out = json.loads(captured.out)
+        assert out["status"] == "ok"
+        assert "Toolkit update available" in captured.err
+        assert "Continuing with the current local toolkit snapshot." in captured.err
+        assert (tmp_path / "interactive-decline" / "config.json").exists()
+        assert "Update the toolkit before creating this workspace?" not in captured.out
+
+    def test_interactive_accept_exits_without_creating_workspace(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import init_workspace
+
+        monkeypatch.setattr(init_workspace, "is_interactive_terminal", lambda: True)
+        monkeypatch.setattr(init_workspace, "_open_console_stream", lambda: None)
+        monkeypatch.setattr(
+            init_workspace,
+            "check_toolkit_freshness",
+            lambda: {
+                "status": "behind",
+                "local_commit": "1111111111111111111111111111111111111111",
+                "local_build_number": 10,
+                "latest_commit": "2222222222222222222222222222222222222222",
+                "latest_build_number": 12,
+                "behind_by": 2,
+                "default_branch": "master",
+                "installer_repo_url": "https://github.com/fjrevoredo/calixto-research-workspace.git",
+            },
+        )
+        monkeypatch.setattr(init_workspace, "_read_prompt", lambda prompt="": "y")
+
+        with pytest.raises(SystemExit) as excinfo:
+            init_workspace.main(["interactive-accept", "--path", str(tmp_path)])
+        captured = capsys.readouterr()
+        assert excinfo.value.code == 1
+        err = json.loads(captured.err[captured.err.find("{") :])
+        assert err["error"] == "update_requested"
+        assert err["workspace_created"] is False
+        assert ".\\install.ps1" in err["update_command"] or "./install.sh" in err["update_command"]
+        assert not (tmp_path / "interactive-accept").exists()
+
+    def test_update_before_create_exits_when_behind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import init_workspace
+
+        monkeypatch.setattr(init_workspace, "is_interactive_terminal", lambda: False)
+        monkeypatch.setattr(
+            init_workspace,
+            "check_toolkit_freshness",
+            lambda: {
+                "status": "behind",
+                "local_commit": "1111111111111111111111111111111111111111",
+                "local_build_number": 10,
+                "latest_commit": "2222222222222222222222222222222222222222",
+                "latest_build_number": 12,
+                "behind_by": 2,
+                "default_branch": "master",
+                "installer_repo_url": "https://github.com/fjrevoredo/calixto-research-workspace.git",
+            },
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            init_workspace.main(["needs-update", "--path", str(tmp_path), "--update-before-create"])
+        captured = capsys.readouterr()
+        assert excinfo.value.code == 1
+        err = json.loads(captured.err)
+        assert err["error"] == "update_required"
+        assert err["workspace_created"] is False
+        assert not (tmp_path / "needs-update").exists()
+
+    def test_require_update_check_fails_when_check_unavailable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import init_workspace
+
+        monkeypatch.setattr(init_workspace, "is_interactive_terminal", lambda: False)
+        monkeypatch.setattr(
+            init_workspace,
+            "check_toolkit_freshness",
+            lambda: {
+                "status": "unavailable",
+                "message": "git is not installed or not on PATH",
+            },
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            init_workspace.main(["require-check", "--path", str(tmp_path), "--require-update-check"])
+        captured = capsys.readouterr()
+        assert excinfo.value.code == 1
+        err = json.loads(captured.err)
+        assert err["error"] == "update_check_failed"
+        assert err["workspace_created"] is False
+        assert not (tmp_path / "require-check").exists()
+
+    def test_explicit_check_updates_warns_but_continues_when_noninteractive_and_behind(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        import init_workspace
+
+        monkeypatch.setattr(init_workspace, "is_interactive_terminal", lambda: False)
+        monkeypatch.setattr(
+            init_workspace,
+            "check_toolkit_freshness",
+            lambda: {
+                "status": "behind",
+                "local_commit": "1111111111111111111111111111111111111111",
+                "local_build_number": 10,
+                "latest_commit": "2222222222222222222222222222222222222222",
+                "latest_build_number": 12,
+                "behind_by": 2,
+                "default_branch": "master",
+                "installer_repo_url": "https://github.com/fjrevoredo/calixto-research-workspace.git",
+            },
+        )
+
+        rc = init_workspace.main(["warn-only", "--path", str(tmp_path), "--check-updates"])
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert json.loads(captured.out)["status"] == "ok"
+        assert "Toolkit update available" in captured.err
+        assert (tmp_path / "warn-only" / "config.json").exists()
 
 
 class TestWorkspaceInfo:

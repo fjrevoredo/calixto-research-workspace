@@ -32,6 +32,10 @@ curl -fsSL https://raw.githubusercontent.com/fjrevoredo/calixto-research-workspa
 irm https://raw.githubusercontent.com/fjrevoredo/calixto-research-workspace/master/install.ps1 | iex
 ```
 
+These one-line examples pin `master` because GitHub raw URLs require a concrete
+branch name. When you run the installer locally without `--branch`, it follows
+the repository default branch.
+
 If you cloned the repo manually, run the root setup script instead:
 
 **Unix**
@@ -55,6 +59,13 @@ uv run python scripts/init_workspace.py mosquito-research
 ```
 
 That creates `workspaces/mosquito-research/` as a standalone snapshot.
+
+In an interactive terminal, `init_workspace.py` checks whether the toolkit
+checkout is behind the remote default branch before it copies the runtime
+bundle. Use `--skip-update-check` to suppress that prompt, `--check-updates`
+to force the check in non-interactive runs, `--require-update-check` to fail
+when the check cannot complete, or `--update-before-create` to print the exact
+installer update command and exit before any workspace is created.
 
 ## Work Inside The Workspace
 

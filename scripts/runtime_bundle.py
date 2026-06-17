@@ -12,6 +12,8 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from toolkit_git import toolkit_build_metadata
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_MANIFEST_PATH = REPO_ROOT / "runtime" / "workspace-manifest.json"
 
@@ -61,13 +63,15 @@ def runtime_bundle_version() -> str:
 def standalone_workspace_metadata() -> dict[str, Any]:
     """Return the metadata fields every standalone workspace must record."""
     manifest = load_runtime_manifest()
-    return {
+    metadata = {
         "workspace_schema_version": manifest["workspace_schema_version"],
         "workspace_layout": manifest["workspace_layout"],
         "runtime_manifest_version": manifest["version"],
         "runtime_bundle_version": runtime_bundle_version(),
         "toolkit_version_created_with": toolkit_version(),
     }
+    metadata.update(toolkit_build_metadata())
+    return metadata
 
 
 def iter_runtime_entries() -> list[dict[str, str]]:
@@ -96,4 +100,3 @@ def copy_runtime_bundle(target_dir: Path) -> None:
         else:
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, destination)
-

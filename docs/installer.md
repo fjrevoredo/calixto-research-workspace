@@ -19,7 +19,7 @@ These modes intentionally have different safety rules.
 
 The supported selectors are:
 
-- default branch: `main`
+- default branch: `master`
 - explicit branch: `--branch <branch>` or `CALIXTO_REPO_BRANCH=<branch>`
 - explicit tag/version: `--version <tag>` or `CALIXTO_VERSION=<tag>`
 
@@ -29,6 +29,9 @@ Rules:
 - The default branch is applied only when no explicit version/tag or branch was
   supplied.
 - Arbitrary refs are not supported.
+- The repository currently uses `master` as its default branch. GitHub raw
+  installer examples therefore pin `master`, while local installer runs without
+  `--branch` follow the repository default branch dynamically.
 
 ## Repository URL Contract
 
