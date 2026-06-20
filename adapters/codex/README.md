@@ -20,7 +20,10 @@ Use Codex at the directory boundary that matches the task:
    ```
 
 3. Codex can discover generated project skills from `.agents/skills/`, while
-   `skills/` remains the canonical bundled copy in the workspace.
+   `skills/` remains the canonical bundled copy in the workspace. If you
+   regenerate mirrors later, divergent existing mirrors are preserved by
+   default; use the toolkit's force-refresh option only when you explicitly
+   want to overwrite them.
 
 ## Developer Workflow
 

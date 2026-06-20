@@ -189,6 +189,25 @@ If install or update is run with dependency setup skipped, the next
 `calixto research` or `calixto open` invocation prepares the needed runtime
 lazily instead of claiming that the toolkit is already ready.
 
+## Launcher Contract
+
+Toolkit setup installs a user-level `calixto` launcher in the user's local bin
+directory.
+
+Rules:
+
+- the launcher is generic and does not embed one checkout's absolute path
+- it resolves the active toolkit root from the current working directory
+  hierarchy
+- `CALIXTO_TOOLKIT_ROOT` can override discovery explicitly
+- if no toolkit root can be resolved, the launcher fails clearly instead of
+  silently repointing to some other checkout
+- the explicit fallback command remains `uv run --project <toolkit-root> calixto ...`
+
+This keeps multiple toolkit checkouts from stealing the same command name from
+each other while preserving the documented `calixto research ...` entry point
+inside a toolkit root.
+
 ## Transactional Updates
 
 Updates use `.calixto-update-transaction/` while applying file replacements.

@@ -42,6 +42,8 @@ Then follow the root `AGENTS.md`.
 
 - Root skills live under `skills/<name>/SKILL.md`.
 - Claude Code project skill mirrors are generated under `.claude/skills/` when
-  you explicitly prepare the Claude harness.
+  you explicitly prepare the Claude harness. Existing divergent mirrors are
+  preserved by default; use the toolkit's force-refresh option only when you
+  explicitly want to overwrite them.
 - Standalone workspaces carry their own bundled copies of the research skills.
 - Existing workspaces are not upgraded in place by toolkit updates.

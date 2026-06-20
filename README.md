@@ -65,8 +65,8 @@ On Windows:
 ```
 
 That prepares the toolkit developer environment, prepares the current managed
-workspace runtime under toolkit-local state, and installs a lightweight
-`calixto` launcher shim.
+workspace runtime under toolkit-local state, and installs a context-aware
+`calixto` launcher.
 
 Then start new research with one command:
 
@@ -74,9 +74,12 @@ Then start new research with one command:
 calixto research "best methods to combat mosquitoes" --agent none
 ```
 
-On Windows, if the launcher shim is not on `PATH`, use the documented fallback:
+The launcher resolves the active toolkit root from your current directory.
+Run it from inside a Calixto toolkit root or set `CALIXTO_TOOLKIT_ROOT`.
+If the launcher directory is not on `PATH`, or you want an explicit one-off
+invocation, use the documented fallback:
 
-```powershell
+```bash
 uv run --project . calixto research "best methods to combat mosquitoes" --agent none
 ```
 
@@ -85,8 +88,24 @@ For supported terminal harnesses, replace `--agent none` with `--agent opencode`
 
 The default managed path creates `workspaces/<derived-name>/` as a standalone
 snapshot, stores the exact question in `config.json`, prepares harness-native
-skill mirrors when requested, and reuses the pre-provisioned managed runtime
+skill mirrors when requested, preserves divergent existing mirrors unless you
+pass `--force-harness-mirrors`, and reuses the pre-provisioned managed runtime
 instead of creating a per-workspace `.venv`.
+
+## Automation And JSON
+
+For agent automation, every top-level non-launching flow has an explicit
+machine-readable mode:
+
+```bash
+calixto research "best methods to combat mosquitoes" --agent none --json
+calixto open mosquito-research --agent none --json
+calixto runtime list --json
+calixto runtime prune --json
+```
+
+`--json` emits one JSON object on stdout and is intentionally incompatible with
+interactive harness launch.
 
 ## Lower-Level Creation
 
@@ -112,6 +131,9 @@ calixto open mosquito-research --agent codex
 `calixto open` selects the exact compatible managed runtime when available. If
 the workspace was copied elsewhere or is otherwise incompatible with the
 managed path, use the workspace-local setup script to create its own `.venv`.
+If you need to regenerate harness discovery mirrors for an existing workspace,
+pass `--prepare-harness`; existing divergent mirrors are preserved by default,
+and `--force-harness-mirrors` is the explicit overwrite path.
 
 ## Workspace-Local Fallback
 

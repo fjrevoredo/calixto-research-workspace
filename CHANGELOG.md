@@ -4,9 +4,10 @@
 
 - Added the top-level `calixto` CLI with `research`, `open`, and `runtime` commands so the default workflow is one command instead of manual `init_workspace.py` + `cd` + workspace-local setup.
 - Added toolkit-local managed runtimes under `.calixto/`, keyed from the bundled workspace dependency files plus host compatibility dimensions, with runtime listing and pruning support.
-- Updated toolkit setup to prepare the current managed runtime eagerly, install a lightweight `calixto` launcher shim, and replace forced `crawl4ai-setup` browser reinstall behavior with a shared runtime probe plus conditional Chromium installation.
+- Updated toolkit setup to prepare the current managed runtime eagerly, install a context-aware `calixto` launcher instead of a checkout-bound shim, and replace forced `crawl4ai-setup` browser reinstall behavior with a shared runtime probe plus conditional Chromium installation.
 - Added `scripts/runtime_probe.py` to both toolkit and workspace runtimes so root and standalone setup paths verify the actual scraper/browser runtime consistently.
 - Added supported harness preparation and launch paths for OpenCode, Claude Code, and Codex, including generated project skill mirrors while preserving canonical bundled skills under `skills/`.
+- Remediated philosophy-contract gaps in the streamlined CLI by making harness mirror refresh non-destructive by default, adding explicit JSON mode coverage for `research`, `open`, `runtime list`, and `runtime prune`, and replacing the root-bound global launcher with a context-discovering dispatcher.
 
 ## 2026-06-17
 

@@ -11,6 +11,7 @@ Primary user flows:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -132,20 +133,70 @@ def _skill_directories(workspace: Path) -> list[Path]:
     return sorted([path for path in skills_dir.iterdir() if path.is_dir()], key=lambda item: item.name)
 
 
-def _generate_harness_skill_mirrors(workspace: Path, harness_name: str) -> list[str]:
+def _directory_signature(root: Path) -> list[str]:
+    entries: list[str] = []
+    for current in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        relative = current.relative_to(root).as_posix()
+        if current.is_dir():
+            entries.append(f"D:{relative}")
+            continue
+        digest = hashlib.sha256(current.read_bytes()).hexdigest()
+        entries.append(f"F:{relative}:{digest}")
+    return entries
+
+
+def _directories_match(source: Path, target: Path) -> bool:
+    if not source.is_dir() or not target.is_dir():
+        return False
+    return _directory_signature(source) == _directory_signature(target)
+
+
+def _sync_skill_directory(source: Path, target: Path, *, force: bool) -> str:
+    if not target.exists():
+        shutil.copytree(source, target)
+        return "created"
+    if _directories_match(source, target):
+        return "unchanged"
+    if force:
+        shutil.rmtree(target)
+        shutil.copytree(source, target)
+        return "replaced"
+    return "preserved"
+
+
+def _integration_paths(report: dict[str, Any]) -> list[str]:
+    paths: list[str] = []
+    for key in ("created", "replaced", "unchanged", "preserved"):
+        paths.extend(report[key])
+    return paths
+
+
+def _generate_harness_skill_mirrors(
+    workspace: Path,
+    harness_name: str,
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    report = {
+        "harness": harness_name,
+        "force": force,
+        "mirror_roots": [],
+        "created": [],
+        "replaced": [],
+        "unchanged": [],
+        "preserved": [],
+    }
     if harness_name == "none":
-        return []
-    generated: list[str] = []
+        return report
     for relative_dir in project_skill_dirs_for(harness_name):
         mirror_root = workspace / relative_dir
         mirror_root.mkdir(parents=True, exist_ok=True)
+        report["mirror_roots"].append(str(mirror_root))
         for canonical_skill_dir in _skill_directories(workspace):
             target_dir = mirror_root / canonical_skill_dir.name
-            if target_dir.exists():
-                shutil.rmtree(target_dir)
-            shutil.copytree(canonical_skill_dir, target_dir)
-            generated.append(str(target_dir))
-    return generated
+            outcome = _sync_skill_directory(canonical_skill_dir, target_dir, force=force)
+            report[outcome].append(str(target_dir))
+    return report
 
 
 def _resolve_workspace_argument(raw: str) -> Path:
@@ -199,9 +250,13 @@ def _create_workspace(args: argparse.Namespace) -> dict[str, Any]:
     workspace = Path(created["workspace"])
     _write_question_to_workspace(workspace, question)
 
-    integration_paths: list[str] = []
+    integration_report = _generate_harness_skill_mirrors(workspace, "none")
     if args.agent != "none":
-        integration_paths = _generate_harness_skill_mirrors(workspace, args.agent)
+        integration_report = _generate_harness_skill_mirrors(
+            workspace,
+            args.agent,
+            force=args.force_harness_mirrors,
+        )
 
     runtime_mode = "standalone_setup_required"
     runtime_key = runtime_spec_for_workspace(workspace).full_key
@@ -224,7 +279,8 @@ def _create_workspace(args: argparse.Namespace) -> dict[str, Any]:
         "runtime_mode": runtime_mode,
         "runtime_key": runtime_key,
         "runtime_display_key": runtime_display_key,
-        "integration_paths": integration_paths,
+        "integration_paths": _integration_paths(integration_report),
+        "integration_report": integration_report,
         "open_command": f'calixto open {name} --agent {args.agent}' if parent == DEFAULT_WORKSPACES_DIR else f'calixto open "{workspace}" --agent {args.agent}',
         "created": created,
         "runtime_details": runtime_details,
@@ -270,34 +326,64 @@ def _research_command(args: argparse.Namespace) -> int:
 
     created = _create_workspace(args)
     if args.json:
-        _emit_json(created)
+        _emit_json({"status": "ok", "command": "research", **created})
         return 0
 
     _emit_human(f"Workspace created: {created['workspace']}")
     _emit_human(f"Runtime: {created['runtime_mode']} ({created['runtime_display_key']})")
-    if created["integration_paths"]:
+    if created["integration_report"]["mirror_roots"]:
         _emit_human(f"Harness integration: {args.agent}")
+    if created["integration_report"]["preserved"]:
+        _emit_human(
+            "Existing harness mirror content was preserved. Re-run with --force-harness-mirrors to overwrite divergent mirrors."
+        )
     _emit_human(f"Next command: {created['open_command']}")
     return _maybe_launch_agent(args, created)
 
 
 def _open_command(args: argparse.Namespace) -> int:
+    if args.json and args.agent != "none":
+        _fail("invalid_arguments", "--json can only be used with --agent none")
     if args.agent != "none":
         ensure_harness_available(args.agent)
 
     workspace = _resolve_workspace_argument(args.workspace)
     _validate_workspace_root(workspace)
 
-    integration_paths: list[str] = []
+    integration_report = _generate_harness_skill_mirrors(workspace, "none")
     if args.prepare_harness and args.agent != "none":
-        integration_paths = _generate_harness_skill_mirrors(workspace, args.agent)
+        integration_report = _generate_harness_skill_mirrors(
+            workspace,
+            args.agent,
+            force=args.force_harness_mirrors,
+        )
 
     if args.agent == "none":
         selection = _prepare_runtime_for_workspace(workspace, setup_local=args.setup_local)
+        payload = {
+            "status": "ok",
+            "command": "open",
+            "workspace": str(workspace),
+            "workspace_name": workspace.name,
+            "agent": args.agent,
+            "runtime_mode": selection["runtime_mode"],
+            "runtime_key": selection["runtime_key"],
+            "runtime_display_key": selection["runtime_display_key"],
+            "runtime_details": selection,
+            "integration_paths": _integration_paths(integration_report),
+            "integration_report": integration_report,
+        }
+        if args.json:
+            _emit_json(payload)
+            return 0
         _emit_human(f"Workspace ready: {workspace}")
         _emit_human(f"Runtime: {selection['runtime_mode']} ({selection['runtime_display_key']})")
-        if integration_paths:
+        if integration_report["mirror_roots"]:
             _emit_human(f"Prepared harness integration for {args.agent}")
+        if integration_report["preserved"]:
+            _emit_human(
+                "Existing harness mirror content was preserved. Re-run with --force-harness-mirrors to overwrite divergent mirrors."
+            )
         return 0
 
     setup_local = args.setup_local
@@ -325,8 +411,18 @@ def _open_command(args: argparse.Namespace) -> int:
     return process.wait()
 
 
-def _runtime_list_command() -> int:
+def _runtime_list_command(args: argparse.Namespace) -> int:
     runtimes = list_managed_runtimes()
+    if args.json:
+        _emit_json(
+            {
+                "status": "ok",
+                "command": "runtime_list",
+                "count": len(runtimes),
+                "runtimes": runtimes,
+            }
+        )
+        return 0
     if not runtimes:
         _emit_human("No managed runtimes are present.")
         return 0
@@ -349,6 +445,18 @@ def _runtime_prune_command(args: argparse.Namespace) -> int:
         force=args.force,
         dry_run=not args.apply,
     )
+    protected_reasons = {"current_key_protected", "referenced_workspace_protected"}
+    status = "partial" if any(reason in protected_reasons for reason in report["reasons"].values()) else "ok"
+    if args.json:
+        _emit_json(
+            {
+                "status": status,
+                "command": "runtime_prune",
+                "requested_keys": args.key or [],
+                **report,
+            }
+        )
+        return 0
     mode = "Dry run" if report["dry_run"] else "Applied"
     _emit_human(f"{mode}:")
     if report["deleted"]:
@@ -389,6 +497,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow workspace-local setup when the new workspace is outside the managed workspaces directory.",
     )
+    research.add_argument(
+        "--force-harness-mirrors",
+        action="store_true",
+        help="Overwrite existing divergent harness mirror skill directories instead of preserving them.",
+    )
     update_group = research.add_mutually_exclusive_group()
     update_group.add_argument("--check-updates", action="store_true")
     update_group.add_argument("--skip-update-check", action="store_true")
@@ -409,18 +522,38 @@ def build_parser() -> argparse.ArgumentParser:
         help="Generate harness skill mirrors for an existing workspace before launch.",
     )
     open_parser.add_argument(
+        "--force-harness-mirrors",
+        action="store_true",
+        help="Overwrite existing divergent harness mirror skill directories instead of preserving them.",
+    )
+    open_parser.add_argument(
         "--setup-local",
         action="store_true",
         help="Allow running the workspace-local setup script when no compatible runtime is available yet.",
     )
+    open_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit one JSON object and do not launch an interactive harness.",
+    )
 
     runtime_parser = subparsers.add_parser("runtime", help="Inspect or prune toolkit-managed runtimes.")
     runtime_subparsers = runtime_parser.add_subparsers(dest="runtime_command", required=True)
-    runtime_subparsers.add_parser("list", help="List managed runtimes.")
+    list_parser = runtime_subparsers.add_parser("list", help="List managed runtimes.")
+    list_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit one JSON object instead of human-readable output.",
+    )
     prune_parser = runtime_subparsers.add_parser("prune", help="Prune managed runtimes.")
     prune_parser.add_argument("--key", action="append", help="Runtime key or display key to target.")
     prune_parser.add_argument("--apply", action="store_true", help="Actually delete matching runtimes.")
     prune_parser.add_argument("--force", action="store_true", help="Allow pruning protected runtimes.")
+    prune_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit one JSON object instead of human-readable output.",
+    )
 
     return parser
 
@@ -434,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "open":
             return _open_command(args)
         if args.command == "runtime" and args.runtime_command == "list":
-            return _runtime_list_command()
+            return _runtime_list_command(args)
         if args.command == "runtime" and args.runtime_command == "prune":
             return _runtime_prune_command(args)
         _fail("unknown_command", f"unknown command: {args.command}")

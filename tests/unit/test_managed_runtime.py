@@ -47,3 +47,23 @@ class TestManagedRuntimeSpecs:
         listed = managed_runtime.list_managed_runtimes(toolkit_root)
         assert len(listed) == 1
         assert listed[0]["referenced_workspaces"] == ["referenced"]
+
+    def test_workspace_setup_argv_prefers_pwsh_on_windows(self, monkeypatch) -> None:
+        workspace = Path(r"D:\Repos\calixto-research-workspace\workspaces\sample")
+
+        monkeypatch.setattr(managed_runtime.sys, "platform", "win32")
+        monkeypatch.setattr(
+            managed_runtime.shutil,
+            "which",
+            lambda name: r"C:\Program Files\PowerShell\7\pwsh.exe" if name == "pwsh" else None,
+        )
+
+        argv = managed_runtime._workspace_setup_argv(workspace)
+
+        assert argv == [
+            r"C:\Program Files\PowerShell\7\pwsh.exe",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(workspace / "setup.ps1"),
+        ]

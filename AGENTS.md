@@ -126,8 +126,10 @@ If you cloned or copied the toolkit manually:
 
 This prepares the toolkit environment so you can generate and maintain
 workspaces. It also prepares the current managed workspace runtime under
-toolkit-local `.calixto/` state and installs a lightweight `calixto` launcher
-shim.
+toolkit-local `.calixto/` state and installs a context-aware `calixto`
+launcher that resolves the active toolkit root from the current directory.
+If you invoke Calixto outside a toolkit root, use the explicit fallback form
+or set `CALIXTO_TOOLKIT_ROOT`.
 
 ## Creating A Workspace
 
@@ -225,6 +227,9 @@ Notes:
 - `calixto research` is the default managed workflow.
 - `calixto open` reopens a managed workspace through the exact compatible
   runtime or falls back to workspace-local setup when needed.
+- `calixto research --agent none --json`, `calixto open --agent none --json`,
+  `calixto runtime list --json`, and `calixto runtime prune --json` are the
+  supported top-level machine-readable entry points.
 - `init_workspace.py` is a toolkit-root command. It creates new standalone
   workspaces.
 - The research scripts are also bundled into every standalone workspace.

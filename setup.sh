@@ -77,12 +77,12 @@ MANAGED_OUTPUT="$(uv run python scripts/managed_runtime.py prepare 2>&1)" || {
 }
 info "Managed runtime ready"
 
-# 6. Install the lightweight launcher shim.
+# 6. Install the context-aware launcher.
 log "Step 6/7: Installing calixto launcher"
 SHIM_OUTPUT="$(uv run python scripts/install_calixto_shim.py --toolkit-root "$REPO_ROOT" 2>&1)" || {
-    fail "Launcher shim installation failed: $SHIM_OUTPUT"
+    fail "Launcher installation failed: $SHIM_OUTPUT"
 }
-info "Launcher shim ready"
+info "Launcher ready"
 if printf '%s' "$SHIM_OUTPUT" | grep -q 'PATH_MISSING::'; then
     SHIM_DIR="$(printf '%s' "$SHIM_OUTPUT" | sed -n 's/^PATH_MISSING:://p')"
     warn "The launcher directory is not currently on PATH: $SHIM_DIR"
@@ -94,6 +94,7 @@ log "Step 7/7: Setup complete"
 info "Total installed: ~500MB (mostly Chromium browser)"
 info ""
 info "Quick start:"
+info "  Run this from inside this toolkit root (or set CALIXTO_TOOLKIT_ROOT):"
 info "  calixto research 'your question' --agent none"
 info "Fallback if the launcher is not on PATH:"
 info "  uv run --project \"$REPO_ROOT\" calixto research 'your question' --agent none"

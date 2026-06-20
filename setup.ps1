@@ -191,13 +191,13 @@ if ($managedRuntime.ExitCode -ne 0) {
 }
 Write-Info "Managed runtime ready"
 
-# 7. Install the lightweight launcher shim.
+# 7. Install the context-aware launcher.
 Write-Section "Step 7/8: Installing calixto launcher"
 $shimResult = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', 'scripts/install_calixto_shim.py', '--toolkit-root', $ScriptDir)
 if ($shimResult.ExitCode -ne 0) {
-    Write-Fail "Launcher shim installation failed (rc=$($shimResult.ExitCode)): $($shimResult.Output)"
+    Write-Fail "Launcher installation failed (rc=$($shimResult.ExitCode)): $($shimResult.Output)"
 }
-Write-Info "Launcher shim ready"
+Write-Info "Launcher ready"
 if ($shimResult.Output -match 'PATH_MISSING::([^\r\n]+)') {
     Write-Warn "The launcher directory is not currently on PATH: $($Matches[1])"
     Write-Warn "Add it to PATH or use the fallback command: uv run --project `"$ScriptDir`" calixto ..."
@@ -208,6 +208,7 @@ Write-Section "Step 8/8: Setup complete"
 Write-Info "Total installed: ~500MB (mostly Chromium browser)"
 Write-Host ""
 Write-Info "Quick start:"
+Write-Info "  Run this from inside this toolkit root (or set CALIXTO_TOOLKIT_ROOT):"
 Write-Info "  calixto research 'your question' --agent none"
 Write-Info "Fallback if the launcher is not on PATH:"
 Write-Info "  uv run --project `"$ScriptDir`" calixto research 'your question' --agent none"

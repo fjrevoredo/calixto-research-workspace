@@ -9,6 +9,8 @@ This directory contains project documentation.
 | `README.md` | (you are here) |
 | `initial-implementation-plan.md` | The original implementation plan that drove the v0.1.0 build (6 milestones, 38 tasks) |
 | `initial-implementation-plan-decision-log.md` | Decisions made during implementation that were not in the original plan |
+| `philosophy-compliance-remediation-plan.md` | Remediation plan for restoring the streamlined CLI flow to the philosophy contract |
+| `philosophy-compliance-remediation-decision-log.md` | Tactical decisions made while executing the philosophy remediation |
 | `adr/001-choose-crawl4ai.md` | First Architecture Decision Record: why Crawl4AI is our scrape backend |
 
 ## ADRs
@@ -41,7 +43,7 @@ To create a new ADR, copy `docs/adr/001-choose-crawl4ai.md` to `docs/adr/NNN-<sh
 
 ## Decision Log
 
-The decision log captures smaller, tactical implementation choices that don't warrant a full ADR. See `initial-implementation-plan-decision-log.md` for the format and the existing entries.
+The decision log captures smaller, tactical implementation choices that don't warrant a full ADR. See `initial-implementation-plan-decision-log.md` and `philosophy-compliance-remediation-decision-log.md` for the format and current examples.
 
 ## See Also
 

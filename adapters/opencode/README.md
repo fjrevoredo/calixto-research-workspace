@@ -21,7 +21,9 @@ Use OpenCode at the correct boundary:
 
 3. OpenCode can discover generated project skills from `.agents/skills/` and
    `.opencode/skills/`, while `skills/` remains the canonical copy bundled into
-   the standalone workspace.
+   the standalone workspace. Regenerating mirrors later preserves divergent
+   existing mirror content by default; use the toolkit's force-refresh option
+   only when you explicitly want to overwrite a mirror.
 
 Use commands from the workspace root, for example:
 

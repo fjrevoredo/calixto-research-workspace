@@ -414,8 +414,9 @@ def validate_local_workspace_runtime(workspace: Path) -> dict[str, Any]:
 
 def _workspace_setup_argv(workspace: Path) -> list[str]:
     if sys.platform.startswith("win"):
+        shell_host = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
         return [
-            "powershell",
+            shell_host,
             "-ExecutionPolicy",
             "Bypass",
             "-File",

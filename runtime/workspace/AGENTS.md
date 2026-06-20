@@ -48,7 +48,10 @@ installs Playwright Chromium only when the browser probe shows it is missing.
    `skills/literature-review/SKILL.md` for paper-heavy work.
    These canonical skills are always present in this workspace. Some harnesses
    may also discover generated mirrors under `.agents/skills/` or
-   `.claude/skills/`, but `skills/` remains the source of truth.
+   `.claude/skills/`, but `skills/` remains the source of truth. When a
+   toolkit root prepares mirrors for an existing workspace, missing mirrors are
+   created and divergent existing mirrors are preserved by default; use the
+   toolkit's explicit force-refresh option if you want to overwrite a mirror.
 2. Set or refine the question in `config.json`.
 3. Run workspace-local scripts from this directory.
 
