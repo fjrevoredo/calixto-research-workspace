@@ -413,14 +413,41 @@ def _hash_path(path: Path) -> str:
     return hasher.hexdigest()
 
 
+def _directory_identity_snapshot(path: Path) -> str:
+    stat_result = path.lstat()
+    return "|".join(
+        [
+            "dir",
+            path.name,
+            str(getattr(stat_result, "st_dev", "")),
+            str(getattr(stat_result, "st_ino", "")),
+            str(stat_result.st_mode),
+            str(stat_result.st_mtime_ns),
+        ]
+    )
+
+
+def _protected_path_snapshot(path: Path) -> str:
+    if path.is_symlink():
+        return f"link|{path.name}|{os.readlink(path)}"
+    mode = path.lstat().st_mode
+    if stat.S_ISDIR(mode):
+        # Protected directories such as workspaces/ and .git/ can be large.
+        # The installer never mutates their contents, so a shallow identity
+        # snapshot is sufficient to detect accidental replacement/removal
+        # without turning updates into an O(total workspace bytes) hash walk.
+        return _directory_identity_snapshot(path)
+    return _hash_path(path)
+
+
 def _protected_snapshots(target_dir: Path) -> dict[str, str]:
     snapshots: dict[str, str] = {}
     for name in sorted(PROTECTED_UPDATE_NAMES):
         path = target_dir / name
         if path.exists():
-            snapshots[name] = _hash_path(path)
+            snapshots[name] = _protected_path_snapshot(path)
     for override in _iter_root_local_overrides(target_dir):
-        snapshots[override.name] = _hash_path(override)
+        snapshots[override.name] = _protected_path_snapshot(override)
     return snapshots
 
 

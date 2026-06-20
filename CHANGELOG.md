@@ -8,6 +8,7 @@
 - Added `scripts/runtime_probe.py` to both toolkit and workspace runtimes so root and standalone setup paths verify the actual scraper/browser runtime consistently.
 - Added supported harness preparation and launch paths for OpenCode, Claude Code, and Codex, including generated project skill mirrors while preserving canonical bundled skills under `skills/`.
 - Remediated philosophy-contract gaps in the streamlined CLI by making harness mirror refresh non-destructive by default, adding explicit JSON mode coverage for `research`, `open`, `runtime list`, and `runtime prune`, and replacing the root-bound global launcher with a context-discovering dispatcher.
+- Fixed toolkit updates in installed roots with existing `workspaces/` trees so the installer no longer recursively hashes every protected workspace file before and after update, which could make Windows updates appear stuck after clone.
 
 ## 2026-06-17
 
