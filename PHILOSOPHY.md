@@ -188,7 +188,7 @@ We don't pretend this is lightweight. We document the real cost of every depende
 Users should be able to adopt this toolkit in minutes and abandon it at any time without losing their work.
 
 **Easy in:**
-- Clone the toolkit, run `setup.sh`, create a workspace snapshot, enter it, and start searching there
+- Clone the toolkit, run `setup.sh`, then start research with `calixto research "your question" --agent none`
 - No accounts, no API keys required for basic use
 - Skills tell the agent what to do. No configuration needed
 - Works with whatever coding agent the user already has

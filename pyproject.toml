@@ -39,6 +39,7 @@ dev = [
 ]
 
 [project.scripts]
+calixto = "scripts.calixto:main"
 calixto-init = "scripts.init_workspace:main"
 calixto-search-web = "scripts.search_web:main"
 calixto-search-arxiv = "scripts.search_arxiv:main"

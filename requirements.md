@@ -28,7 +28,7 @@ We are **not** building an app. We are building **infrastructure**: the skills, 
 | Layer | What we build | Notes |
 |---|---|---|
 | **Skills** | Markdown instruction files for agents | Deep research, literature review, meta-skills |
-| **Scripts** | Python CLI helpers | Web search, arXiv search, workspace init |
+| **Scripts** | Python CLI helpers | Top-level research/open/runtime orchestration plus lower-level search and workspace helpers |
 | **Providers** | Pluggable search and scrape backends | DuckDuckGo (default), Brave, Tavily, Crawl4AI |
 | **Templates** | Workspace folder structure conventions | Copied on workspace creation |
 | **Examples** | Golden dataset research workspace | Reproducible benchmark + reference implementation |
@@ -216,7 +216,26 @@ User query
 
 ## 4. Script Interfaces
 
-### 4.1 `init_workspace.py`
+### 4.1 `calixto`
+
+Top-level managed workflow for creating, reopening, and maintaining workspaces.
+
+``` 
+calixto research "<question>" [--name slug] [--path DIR] [--agent none|opencode|claude|codex] \
+    [--json] [--check-updates | --skip-update-check] [--require-update-check] [--update-before-create]
+calixto open <slug-or-path> [--agent none|opencode|claude|codex] [--prepare-harness] [--setup-local]
+calixto runtime list
+calixto runtime prune [--key KEY] [--apply] [--force]
+```
+
+- `research` creates a standalone workspace, stores the exact question in `config.json`, prepares harness skill mirrors when requested, and uses the toolkit-managed runtime only when the workspace is eligible
+- `open` reopens a workspace through the exact compatible managed runtime or a validated workspace-local `.venv`
+- `runtime list` reports managed runtime keys and references
+- `runtime prune` removes old managed runtime keys conservatively
+- `--json` is valid only with `--agent none`
+- `init_workspace.py` remains the lower-level workspace factory for automation
+
+### 4.2 `init_workspace.py`
 
 Create a new standalone research workspace snapshot.
 
@@ -240,7 +259,7 @@ uv run python scripts/init_workspace.py <name> [--path ./workspaces] \
 - Writes explicit workspace metadata into `config.json`
 - Prints structured JSON including the workspace path and runtime metadata
 
-### 4.2 `search_web.py`
+### 4.3 `search_web.py`
 
 Search the web and scrape results into the workspace.
 
@@ -262,7 +281,7 @@ python scripts/search_web.py "<query>" --workspace <path> \
 - `--no-scrape` saves only URLs + snippets (faster, no Chromium needed)
 - `--truncate N` caps each source at N words
 
-### 4.3 `search_arxiv.py`
+### 4.4 `search_arxiv.py`
 
 Search arXiv for academic papers.
 
@@ -284,7 +303,7 @@ python scripts/search_arxiv.py "<query>" --workspace <path> \
 - `--must-contain` filters obviously irrelevant lexical matches before they consume source slots
 - `--min-query-token-overlap` marks low-overlap saved results as corroboration-required instead of silently treating them as normal evidence
 
-### 4.4 `search_pubmed.py`
+### 4.5 `search_pubmed.py`
 
 Search PubMed / MEDLINE for biomedical papers.
 
@@ -301,7 +320,7 @@ python scripts/search_pubmed.py "<query>" --workspace <path> \
 - Stores PubMed ID, journal, authors, publication date, DOI, and abstract when available
 - Uses the same cache conventions as the other search scripts
 
-### 4.5 `workspace_info.py`
+### 4.6 `workspace_info.py`
 
 Manage existing workspaces.
 
@@ -538,9 +557,9 @@ Our skills live in `skills/*.md` but each agent loads instructions differently:
 ### 9.2 Our Approach
 
 - `AGENTS.md` at repo root: universal entry point for any agent
-- `adapters/<agent>/README.md`: agent-specific setup instructions
+- `adapters/<agent>/README.md`: agent-specific setup and launch instructions
 - Each adapter explains the toolkit-root vs workspace-root boundary for that agent
-- Skills themselves are agent-agnostic markdown, with workspace runtime copies bundled into standalone workspaces
+- Skills themselves are agent-agnostic markdown, with canonical workspace copies bundled into standalone workspaces and harness-native mirrors generated when supported
 
 ### 9.3 `AGENTS.md`
 
@@ -905,6 +924,12 @@ The skill should instruct the agent to:
 ### 16.1 Create
 
 ``` 
+calixto research "your question" --agent none
+```
+
+Lower-level automation path:
+
+``` 
 uv run python scripts/init_workspace.py <name>
 ```
 
@@ -952,6 +977,12 @@ Audit results for ai-safety-2025:
 ```
 
 ### 16.4 Resume
+
+Managed reopening:
+
+```
+calixto open <name> --agent codex
+```
 
 Agent reads `config.json` to see what searches have been done and what state the workspace is in. No special resume command needed. The files ARE the state.
 

@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import socket
+import hashlib
 import sys
 import tempfile
 import time
@@ -846,6 +847,7 @@ def is_valid_slug(name: str) -> bool:
 
 def slugify(text: str) -> str:
     """Convert arbitrary text to a workspace slug."""
+    original = text
     text = text.lower().strip()
     # Replace non-alphanumeric with hyphens
     text = re.sub(r"[^a-z0-9]+", "-", text)
@@ -855,8 +857,9 @@ def slugify(text: str) -> str:
     text = text.strip("-")
     if len(text) > 64:
         text = text[:64].rstrip("-")
-    if len(text) < 2:
-        text = (text + "-x")[:2]
+    if len(text) < 2 or not is_valid_slug(text):
+        digest = hashlib.sha256(original.encode("utf-8")).hexdigest()[:10]
+        text = f"research-{digest}"
     return text
 
 

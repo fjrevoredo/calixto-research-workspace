@@ -82,6 +82,11 @@ class TestSlug:
         assert len(result) <= 64
         assert not result.endswith("-")
 
+    def test_slugify_uses_stable_fallback_for_symbol_only_text(self) -> None:
+        result = slugify("!!!")
+        assert result.startswith("research-")
+        assert is_valid_slug(result)
+
 
 # --- URL normalization ---
 

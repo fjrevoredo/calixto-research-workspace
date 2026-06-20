@@ -50,28 +50,73 @@ If you cloned the repo manually, run the root setup script instead:
 .\setup.ps1
 ```
 
-## Create A Workspace
+## Default Flow
 
-From the toolkit root:
+Run toolkit setup once:
+
+```bash
+./setup.sh
+```
+
+On Windows:
+
+```powershell
+.\setup.ps1
+```
+
+That prepares the toolkit developer environment, prepares the current managed
+workspace runtime under toolkit-local state, and installs a lightweight
+`calixto` launcher shim.
+
+Then start new research with one command:
+
+```bash
+calixto research "best methods to combat mosquitoes" --agent none
+```
+
+On Windows, if the launcher shim is not on `PATH`, use the documented fallback:
+
+```powershell
+uv run --project . calixto research "best methods to combat mosquitoes" --agent none
+```
+
+For supported terminal harnesses, replace `--agent none` with `--agent opencode`,
+`--agent claude`, or `--agent codex`.
+
+The default managed path creates `workspaces/<derived-name>/` as a standalone
+snapshot, stores the exact question in `config.json`, prepares harness-native
+skill mirrors when requested, and reuses the pre-provisioned managed runtime
+instead of creating a per-workspace `.venv`.
+
+## Lower-Level Creation
+
+`scripts/init_workspace.py` remains the lower-level structured workspace factory
+for automation and maintainer workflows:
 
 ```bash
 uv run python scripts/init_workspace.py mosquito-research
 ```
 
-That creates `workspaces/mosquito-research/` as a standalone snapshot.
+It still owns the pre-create toolkit freshness check. Use
+`--skip-update-check`, `--check-updates`, `--require-update-check`, or
+`--update-before-create` there or through `calixto research`.
 
-In an interactive terminal, `init_workspace.py` checks whether the local
-toolkit snapshot is stale before it copies the runtime bundle. Developer
-checkouts use live git state; installed toolkit roots use installer-written
-provenance metadata even though the installed root is not itself a git repo.
-Use `--skip-update-check` to suppress that prompt, `--check-updates` to force
-the check in non-interactive runs, `--require-update-check` to fail when the
-check cannot complete, or `--update-before-create` to print the exact installer
-update command and exit before any workspace is created.
+## Reopen A Workspace
 
-## Work Inside The Workspace
+Managed workspaces can be reopened without a manual `cd`:
 
-Move into the generated workspace and prepare its local runtime:
+```bash
+calixto open mosquito-research --agent codex
+```
+
+`calixto open` selects the exact compatible managed runtime when available. If
+the workspace was copied elsewhere or is otherwise incompatible with the
+managed path, use the workspace-local setup script to create its own `.venv`.
+
+## Workspace-Local Fallback
+
+If you copy a workspace away from the creating toolkit root, bootstrap it
+locally:
 
 **Unix**
 
@@ -87,7 +132,8 @@ cd workspaces\mosquito-research
 .\setup.ps1
 ```
 
-Then run research commands from the workspace root:
+That local setup path remains the supported portability contract. After local
+setup, run research commands from the workspace root:
 
 ```bash
 uv run python scripts/search_web.py "best methods to combat mosquitoes" --workspace . --max-results 10

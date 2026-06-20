@@ -7,18 +7,16 @@ Use Claude Code in two different places depending on the task:
 
 ## Research Workflow
 
-1. From the toolkit root, create a workspace:
+1. From the toolkit root, run:
 
    ```bash
-   uv run python scripts/init_workspace.py my-topic
+   calixto research "your question" --agent claude
    ```
 
-2. Enter the generated workspace and bootstrap it:
+2. If you create with `--agent none`, reopen later with:
 
    ```bash
-   cd workspaces/my-topic
-   ./setup.sh
-   claude
+   calixto open my-topic --agent claude
    ```
 
 3. Inside Claude Code, read the workspace-local files:
@@ -43,5 +41,7 @@ Then follow the root `AGENTS.md`.
 ## Notes
 
 - Root skills live under `skills/<name>/SKILL.md`.
+- Claude Code project skill mirrors are generated under `.claude/skills/` when
+  you explicitly prepare the Claude harness.
 - Standalone workspaces carry their own bundled copies of the research skills.
 - Existing workspaces are not upgraded in place by toolkit updates.

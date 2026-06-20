@@ -48,6 +48,10 @@ def _imports_module(text: str, module: str) -> bool:
     return module in _iter_imported_modules(text)
 
 
+def _references_runtime_probe(text: str) -> bool:
+    return "scripts/runtime_probe.py" in text
+
+
 def _legacy_import_lines(text: str, module: str) -> list[str]:
     matches: list[str] = []
     for raw_line in text.splitlines():
@@ -197,12 +201,18 @@ class TestSetupShPackageCheck:
         # fail with an "rpc" error before running any commands. Detect
         # that condition up front and skip.
         if bash_path and "system32" in bash_path.lower():
-            launcher_check = subprocess.run(
-                [bash_path, "-c", "echo READY"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
+            try:
+                launcher_check = subprocess.run(
+                    [bash_path, "-c", "echo READY"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                pytest.skip(
+                    "bash is the WSL launcher and did not respond quickly enough; "
+                    "syntax check is not meaningful on this host"
+                )
             if launcher_check.returncode != 0 or "rpc" in launcher_check.stderr.lower():
                 pytest.skip(
                     "bash is the WSL launcher but no WSL distribution "
@@ -248,8 +258,8 @@ class TestSetupShPackageCheck:
         if not _have_bash():
             pytest.skip("bash not available")
         text = RUNTIME_SETUP_SH.read_text(encoding="utf-8")
-        assert _imports_module(text, "ddgs"), (
-            "runtime/workspace/setup.sh verification step must import `ddgs`."
+        assert _references_runtime_probe(text), (
+            "runtime/workspace/setup.sh must verify the standalone runtime via scripts/runtime_probe.py."
         )
 
     def test_runtime_setup_sh_syntax(self) -> None:
@@ -349,6 +359,7 @@ class TestSetupShPackageCheck:
                 exit 0
             fi
             if [ "$1" = "run" ]; then
+                echo '{"status":"ok","browser_ready":true}'
                 exit 0
             fi
             echo "unexpected uv args: $*" >&2
@@ -504,8 +515,8 @@ class TestSetupPs1NativeExitCodes:
         if not _have_pwsh():
             pytest.skip("pwsh not available")
         text = RUNTIME_SETUP_PS1.read_text(encoding="utf-8")
-        assert _imports_module(text, "ddgs"), (
-            "runtime/workspace/setup.ps1 verification step must import `ddgs`."
+        assert _references_runtime_probe(text), (
+            "runtime/workspace/setup.ps1 must verify the standalone runtime via scripts/runtime_probe.py."
         )
 
     @pytest.mark.parametrize("source_script", [SETUP_PS1, RUNTIME_SETUP_PS1])

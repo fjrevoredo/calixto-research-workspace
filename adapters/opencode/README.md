@@ -7,22 +7,21 @@ Use OpenCode at the correct boundary:
 
 ## Research Workflow
 
-1. Create a workspace from the toolkit root:
+1. Run the streamlined flow from the toolkit root:
 
    ```bash
-   uv run python scripts/init_workspace.py my-topic
+   calixto research "your question" --agent opencode
    ```
 
-2. Enter the generated workspace and bootstrap it:
+2. If you create with `--agent none`, reopen later with:
 
    ```bash
-   cd workspaces/my-topic
-   ./setup.sh
-   opencode
+   calixto open my-topic --agent opencode
    ```
 
-3. In OpenCode, read the workspace-local `AGENTS.md` and the bundled research
-   skill you want to follow.
+3. OpenCode can discover generated project skills from `.agents/skills/` and
+   `.opencode/skills/`, while `skills/` remains the canonical copy bundled into
+   the standalone workspace.
 
 Use commands from the workspace root, for example:
 
@@ -40,3 +39,5 @@ root `AGENTS.md`.
 - Skills are directories with `SKILL.md`, not flat `skills/*.md` files.
 - Research workspaces are standalone snapshots. Treat them as the execution
   boundary for research tasks.
+- If you copy a workspace away from the toolkit root, run the workspace-local
+  `setup.sh` or `setup.ps1` there before continuing.

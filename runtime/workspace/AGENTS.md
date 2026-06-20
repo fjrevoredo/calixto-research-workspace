@@ -14,9 +14,18 @@ as the active research runtime. Do not depend on a parent toolkit checkout.
 This workspace is portable. You can copy it elsewhere and keep working after
 running the workspace-local setup script there.
 
+## Runtime Modes
+
+This workspace can run in two supported modes:
+
+- Managed mode: when the creating toolkit root reopens this workspace through
+  `calixto open`, it may supply a compatible shared runtime.
+- Standalone mode: if this workspace is copied elsewhere, run the local setup
+  script here to create its own `.venv`.
+
 ## First Run
 
-Run one setup command from the workspace root:
+For copied or incompatible workspaces, run one setup command from the workspace root:
 
 **Unix**
 
@@ -31,14 +40,15 @@ Run one setup command from the workspace root:
 ```
 
 That creates or updates the local `.venv/`, installs Python dependencies, and
-installs Playwright Chromium for live web scraping.
+installs Playwright Chromium only when the browser probe shows it is missing.
 
 ## How To Work
 
 1. Read `skills/deep-research/SKILL.md` for general research or
    `skills/literature-review/SKILL.md` for paper-heavy work.
-   Read the file directly from this workspace. Do not rely on a generic skill
-   loader to discover workspace-local skills.
+   These canonical skills are always present in this workspace. Some harnesses
+   may also discover generated mirrors under `.agents/skills/` or
+   `.claude/skills/`, but `skills/` remains the source of truth.
 2. Set or refine the question in `config.json`.
 3. Run workspace-local scripts from this directory.
 
@@ -82,3 +92,5 @@ Final-report discipline:
   not bundled here.
 - Root toolkit updates do not mutate this workspace. Create a new workspace
   from a newer toolkit version if you want a newer runtime snapshot.
+- This workspace does not store an absolute path back to the creating toolkit's
+  managed runtime. Managed compatibility is derived at launch time.

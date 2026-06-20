@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import json
+import sys
+from argparse import Namespace
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+SCRIPTS_DIR = REPO_ROOT / "scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import calixto  # noqa: E402
+from _common import is_valid_slug  # noqa: E402
+
+
+def _run_cli(*args: str):
+    import subprocess
+
+    return subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "calixto.py"), *args],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+    )
+
+
+class TestCalixtoResearchJson:
+    def test_research_json_writes_question(self, tmp_path: Path) -> None:
+        result = _run_cli(
+            "research",
+            "What should we test?",
+            "--agent",
+            "none",
+            "--json",
+            "--skip-update-check",
+            "--path",
+            str(tmp_path),
+        )
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["question"] == "What should we test?"
+        workspace = Path(payload["workspace"])
+        config = json.loads((workspace / "config.json").read_text(encoding="utf-8"))
+        assert config["question"] == "What should we test?"
+        assert payload["runtime_mode"] == "standalone_setup_required"
+
+    def test_research_rejects_json_with_launching_agent(self, tmp_path: Path) -> None:
+        result = _run_cli(
+            "research",
+            "Question text",
+            "--agent",
+            "codex",
+            "--json",
+            "--skip-update-check",
+            "--path",
+            str(tmp_path),
+        )
+        assert result.returncode == 1
+        error = json.loads(result.stdout)
+        assert error["error"] == "invalid_arguments"
+
+    def test_research_uses_hash_fallback_for_symbol_only_question(self, tmp_path: Path) -> None:
+        result = _run_cli(
+            "research",
+            "!!!",
+            "--agent",
+            "none",
+            "--json",
+            "--skip-update-check",
+            "--path",
+            str(tmp_path),
+        )
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["workspace_name"].startswith("research-")
+        assert is_valid_slug(payload["workspace_name"])
+
+    def test_research_auto_collision_adds_suffix(self, tmp_path: Path) -> None:
+        first = _run_cli(
+            "research",
+            "Same question",
+            "--agent",
+            "none",
+            "--json",
+            "--skip-update-check",
+            "--path",
+            str(tmp_path),
+        )
+        second = _run_cli(
+            "research",
+            "Same question",
+            "--agent",
+            "none",
+            "--json",
+            "--skip-update-check",
+            "--path",
+            str(tmp_path),
+        )
+        assert first.returncode == 0, first.stderr
+        assert second.returncode == 0, second.stderr
+        first_payload = json.loads(first.stdout)
+        second_payload = json.loads(second.stdout)
+        assert first_payload["workspace_name"] == "same-question"
+        assert second_payload["workspace_name"] == "same-question-2"
+
+
+class TestHarnessMirrorGeneration:
+    def test_create_workspace_generates_codex_skill_mirror(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.setattr(calixto, "ensure_harness_available", lambda name: "codex")
+        args = Namespace(
+            question="Mirror generation question",
+            name=None,
+            path=str(tmp_path),
+            agent="codex",
+            json=False,
+            setup_local=False,
+            check_updates=False,
+            skip_update_check=True,
+            require_update_check=False,
+            update_before_create=False,
+        )
+
+        created = calixto._create_workspace(args)
+        workspace = Path(created["workspace"])
+        assert (workspace / ".agents" / "skills" / "deep-research" / "SKILL.md").exists()
+        canonical = (workspace / "skills" / "deep-research" / "SKILL.md").read_text(encoding="utf-8")
+        mirrored = (workspace / ".agents" / "skills" / "deep-research" / "SKILL.md").read_text(encoding="utf-8")
+        assert mirrored == canonical
+
+    def test_open_prepare_harness_generates_claude_mirror(self, tmp_path: Path, monkeypatch) -> None:
+        import init_workspace
+
+        init_workspace.init_workspace("existing", tmp_path)
+        workspace = tmp_path / "existing"
+
+        monkeypatch.setattr(calixto, "ensure_harness_available", lambda name: "claude")
+        monkeypatch.setattr(
+            calixto,
+            "_prepare_runtime_for_workspace",
+            lambda workspace, setup_local: {
+                "runtime_mode": "local",
+                "runtime_key": "abc",
+                "runtime_display_key": "abc",
+                "environment_path": str(workspace / ".venv"),
+            },
+        )
+
+        class _FakeProcess:
+            def wait(self) -> int:
+                return 0
+
+        monkeypatch.setattr(calixto, "launch_harness_process", lambda *args, **kwargs: _FakeProcess())
+
+        rc = calixto.main(
+            [
+                "open",
+                str(workspace),
+                "--agent",
+                "claude",
+                "--prepare-harness",
+            ]
+        )
+        assert rc == 0
+        assert (workspace / ".claude" / "skills" / "deep-research" / "SKILL.md").exists()

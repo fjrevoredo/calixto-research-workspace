@@ -53,31 +53,29 @@ if ! uv sync --locked; then
 fi
 info "Workspace dependencies installed"
 
-log "Step 4/5: Installing Playwright Chromium"
-chromium_ok=0
-if uv run crawl4ai-setup 2>/dev/null; then
-    chromium_ok=1
+log "Step 4/5: Verifying workspace runtime"
+PROBE_OUTPUT="$(uv run python scripts/runtime_probe.py 2>&1)" || true
+if printf '%s' "$PROBE_OUTPUT" | grep -Eq '"browser_ready"[[:space:]]*:[[:space:]]*true'; then
+    info "Workspace runtime already has a working browser"
 else
-    warn "crawl4ai-setup encountered an issue; falling back to playwright install chromium"
-    if uv run python -m playwright install chromium; then
-        chromium_ok=1
+    if printf '%s' "$PROBE_OUTPUT" | grep -q '"error": "missing_browser"'; then
+        info "Chromium is missing; installing it for this standalone workspace"
+        INSTALL_OUTPUT="$(uv run python -m playwright install chromium 2>&1)" || {
+            fail "Chromium install failed: $INSTALL_OUTPUT"
+        }
+        PROBE_OUTPUT="$(uv run python scripts/runtime_probe.py 2>&1)" || {
+            fail "Workspace runtime probe still failed after browser install: $PROBE_OUTPUT"
+        }
     else
-        warn "Playwright Chromium install failed. Web scraping will not work until fixed."
-        warn "See https://playwright.dev/python/docs/intro for manual install."
+        fail "Workspace runtime probe failed: $PROBE_OUTPUT"
     fi
 fi
 
-log "Step 5/5: Verifying workspace runtime"
-VERIFY_OUTPUT="$(uv run python -c 'import crawl4ai, ddgs, arxiv, yaml; print("ok")' 2>&1)" || {
-    fail "Verification import failed: $VERIFY_OUTPUT"
-}
-info "All required packages importable: $VERIFY_OUTPUT"
-if [ "$chromium_ok" -ne 1 ]; then
-    fail "Chromium was not installed successfully. Web scraping is the default mode; without Chromium, search_web.py will not be able to fetch pages. Re-run with explicit: uv run python -m playwright install chromium"
-fi
+log "Step 5/5: Workspace ready"
 
-log "Workspace ready"
 info "Next steps:"
+info "  If this workspace lives under the creating toolkit root, you can reopen it with calixto open from there."
+info "  If it was copied elsewhere, this local .venv is now the supported runtime."
 info "  update config.json with your research question"
 info "  uv run python scripts/search_web.py 'your query' --workspace ."
 info "  uv run python scripts/workspace_info.py audit ."

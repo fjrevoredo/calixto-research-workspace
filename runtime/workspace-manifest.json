@@ -90,6 +90,11 @@
     },
     {
       "kind": "file",
+      "source": "scripts/runtime_probe.py",
+      "destination": "scripts/runtime_probe.py"
+    },
+    {
+      "kind": "file",
       "source": "templates/workspace/config.json",
       "destination": "config.json"
     },

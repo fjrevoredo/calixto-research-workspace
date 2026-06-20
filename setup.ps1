@@ -91,7 +91,7 @@ function Repair-IncompleteVenv {
 }
 
 # 1. Check PowerShell execution policy
-Write-Section "Step 1/7: Checking PowerShell execution policy"
+Write-Section "Step 1/8: Checking PowerShell execution policy"
 $policy = Get-ExecutionPolicy -Scope CurrentUser
 if ($policy -eq 'Restricted' -or $policy -eq 'AllSigned') {
     if (-not $Force) {
@@ -104,7 +104,7 @@ if ($policy -eq 'Restricted' -or $policy -eq 'AllSigned') {
 }
 
 # 2. Verify Python 3.11+
-Write-Section "Step 2/7: Verifying Python"
+Write-Section "Step 2/8: Verifying Python"
 $python = $null
 foreach ($cand in @('python', 'python3', 'py')) {
     if (Get-Command $cand -ErrorAction SilentlyContinue) {
@@ -127,7 +127,7 @@ if ($pyMajor -lt 3 -or ($pyMajor -eq 3 -and $pyMinor -lt 11)) {
 }
 
 # 3. Install uv if missing
-Write-Section "Step 3/7: Installing uv (Python package manager)"
+Write-Section "Step 3/8: Installing uv (Python package manager)"
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     $uvVersion = uv --version
     if ($LASTEXITCODE -ne 0) {
@@ -153,7 +153,7 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
 
 # 4. Sync dependencies. PowerShell try/catch does NOT reliably catch
 # native executable nonzero exits: $LASTEXITCODE is the source of truth.
-Write-Section "Step 4/7: Installing Python dependencies"
+Write-Section "Step 4/8: Installing Python dependencies"
 Write-Info "This installs: crawl4ai (~50MB), ddgs (~5MB, renamed from duckduckgo-search), arxiv (~1MB), pyyaml (~1MB)"
 Repair-IncompleteVenv
 $syncResult = Invoke-NativeCapture -FilePath 'uv' -Arguments @('sync', '--locked')
@@ -162,25 +162,8 @@ if ($syncResult.ExitCode -ne 0) {
 }
 Write-Info "Python dependencies installed"
 
-# 5. Install Playwright + Chromium via crawl4ai-setup
-Write-Section "Step 5/7: Installing Playwright + Chromium for Crawl4AI"
-Write-Info "This downloads Chromium (~450MB) and may take a few minutes"
-$chromiumOk = $false
-$crawlSetup = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'crawl4ai-setup')
-if ($crawlSetup.ExitCode -eq 0) {
-    $chromiumOk = $true
-} else {
-    Write-Warn "crawl4ai-setup returned rc=$($crawlSetup.ExitCode); falling back to direct playwright install"
-    $playwrightInstall = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', '-m', 'playwright', 'install', 'chromium')
-    if ($playwrightInstall.ExitCode -eq 0) {
-        $chromiumOk = $true
-    } else {
-        Write-Warn "Playwright Chromium install had issues (rc=$($playwrightInstall.ExitCode))."
-    }
-}
-
-# 6. Verify the install. We verify the live `ddgs` module name.
-Write-Section "Step 6/7: Verifying installation"
+# 5. Verify the root toolkit environment itself.
+Write-Section "Step 5/8: Verifying toolkit dependencies"
 $verifyCode = @'
 import sys
 try:
@@ -199,40 +182,35 @@ if ($verifyResult.ExitCode -ne 0) {
 }
 Write-Info $verifyResult.Output
 
-# 6b. Verify Chromium is installed and launchable. The default
-# scraping provider (Crawl4AI / Playwright) needs a working browser;
-# without it, search_web.py's default mode is unusable, so a
-# missing browser is a setup failure rather than a warning.
-if (-not $chromiumOk) {
-    Write-Fail "Chromium was not installed successfully. Web scraping is the default mode; without Chromium, search_web.py will not be able to fetch pages. Re-run with explicit: uv run python -m playwright install chromium"
+# 6. Prepare the shared managed workspace runtime.
+Write-Section "Step 6/8: Preparing managed workspace runtime"
+Write-Info "This prepares the shared workspace runtime once and installs Chromium only when missing"
+$managedRuntime = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', 'scripts/managed_runtime.py', 'prepare')
+if ($managedRuntime.ExitCode -ne 0) {
+    Write-Fail "Managed runtime preparation failed (rc=$($managedRuntime.ExitCode)): $($managedRuntime.Output)"
 }
-$launchCode = @'
-from playwright.sync_api import sync_playwright
-import sys
-try:
-    with sync_playwright() as p:
-        b = p.chromium.launch(headless=True)
-        b.close()
-    print("ok")
-except Exception as e:
-    print(f"launch_failed: {e}", file=sys.stderr)
-    sys.exit(1)
-'@
-$launchResult = Invoke-UvPythonCode -Code $launchCode
-if ($launchResult.ExitCode -ne 0) {
-    Write-Fail "Chromium install completed but the browser failed to launch (rc=$($launchResult.ExitCode)): $($launchResult.Output)"
-}
-Write-Info "Chromium launch check passed"
+Write-Info "Managed runtime ready"
 
-# 7. Summary
-Write-Section "Step 7/7: Setup complete"
+# 7. Install the lightweight launcher shim.
+Write-Section "Step 7/8: Installing calixto launcher"
+$shimResult = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', 'scripts/install_calixto_shim.py', '--toolkit-root', $ScriptDir)
+if ($shimResult.ExitCode -ne 0) {
+    Write-Fail "Launcher shim installation failed (rc=$($shimResult.ExitCode)): $($shimResult.Output)"
+}
+Write-Info "Launcher shim ready"
+if ($shimResult.Output -match 'PATH_MISSING::([^\r\n]+)') {
+    Write-Warn "The launcher directory is not currently on PATH: $($Matches[1])"
+    Write-Warn "Add it to PATH or use the fallback command: uv run --project `"$ScriptDir`" calixto ..."
+}
+
+# 8. Summary
+Write-Section "Step 8/8: Setup complete"
 Write-Info "Total installed: ~500MB (mostly Chromium browser)"
 Write-Host ""
 Write-Info "Quick start:"
-Write-Info "  uv run python scripts\init_workspace.py my-research"
-Write-Info "  cd workspaces\my-research"
-Write-Info "  .\setup.ps1"
-Write-Info "  uv run python scripts\search_web.py 'your query' --workspace ."
+Write-Info "  calixto research 'your question' --agent none"
+Write-Info "Fallback if the launcher is not on PATH:"
+Write-Info "  uv run --project `"$ScriptDir`" calixto research 'your question' --agent none"
 Write-Host ""
 Write-Info "Run the golden dataset to validate:"
 Write-Info "  python tests\golden\run.py --use-cache"

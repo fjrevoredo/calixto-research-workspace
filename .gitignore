@@ -11,6 +11,7 @@ __pycache__/
 # Workspaces and test data
 workspaces/
 !examples/
+.calixto/
 
 # Python virtual environment
 .venv/

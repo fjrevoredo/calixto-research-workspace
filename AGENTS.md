@@ -37,17 +37,19 @@ this toolkit root.
 From the toolkit root:
 
 ```bash
-uv run python scripts/init_workspace.py my-topic
-cd workspaces/my-topic
-./setup.sh
+calixto research "your question" --agent none
 ```
 
 Or on Windows:
 
 ```powershell
-uv run python scripts\init_workspace.py my-topic
-cd workspaces\my-topic
-.\setup.ps1
+calixto research "your question" --agent none
+```
+
+If the `calixto` launcher is not on `PATH`, use the fallback form:
+
+```bash
+uv run --project . calixto research "your question" --agent none
 ```
 
 Once inside the workspace, stop using this root `AGENTS.md` and read the
@@ -123,11 +125,23 @@ If you cloned or copied the toolkit manually:
 ```
 
 This prepares the toolkit environment so you can generate and maintain
-workspaces.
+workspaces. It also prepares the current managed workspace runtime under
+toolkit-local `.calixto/` state and installs a lightweight `calixto` launcher
+shim.
 
 ## Creating A Workspace
 
-Generate a new standalone workspace snapshot:
+The default user-facing command is:
+
+```bash
+calixto research "my research question" --agent none
+```
+
+This creates a standalone workspace snapshot under the toolkit root's
+`workspaces/` directory, stores the exact question in `config.json`, and reuses
+the managed runtime when the workspace stays under that toolkit root.
+
+The lower-level structured factory remains:
 
 ```bash
 uv run python scripts/init_workspace.py my-research-topic
@@ -153,7 +167,14 @@ script in its new location.
 
 ## Working In A Workspace
 
-After creating a workspace:
+After creating a managed workspace:
+
+```bash
+calixto open my-research-topic --agent codex
+```
+
+If the workspace is copied elsewhere later, run the workspace-local setup
+script in its new location and continue there:
 
 ```bash
 cd workspaces/my-research-topic
@@ -162,8 +183,8 @@ uv run python scripts/search_web.py "your query" --workspace .
 uv run python scripts/workspace_info.py audit .
 ```
 
-The workspace root is the execution boundary. Research commands should resolve
-paths inside that workspace, not back into the toolkit repository.
+The workspace root remains the execution boundary. Research commands should
+resolve paths inside that workspace, not back into the toolkit repository.
 
 ## Repository Structure
 
@@ -192,6 +213,7 @@ research-workspace/
 
 Toolkit-side scripts:
 
+- `scripts/calixto.py research|open|runtime ...`
 - `scripts/init_workspace.py <name> [--path DIR]`
 - `scripts/search_web.py <query> --workspace PATH [--max-results N] ...`
 - `scripts/search_arxiv.py <query> --workspace PATH [--max-results N] ...`
@@ -200,6 +222,9 @@ Toolkit-side scripts:
 
 Notes:
 
+- `calixto research` is the default managed workflow.
+- `calixto open` reopens a managed workspace through the exact compatible
+  runtime or falls back to workspace-local setup when needed.
 - `init_workspace.py` is a toolkit-root command. It creates new standalone
   workspaces.
 - The research scripts are also bundled into every standalone workspace.

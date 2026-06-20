@@ -86,7 +86,7 @@ function Repair-IncompleteVenv {
     }
 }
 
-Write-Section "Step 1/6: Checking PowerShell execution policy"
+Write-Section "Step 1/5: Checking PowerShell execution policy"
 $policy = Get-ExecutionPolicy -Scope CurrentUser
 if ($policy -eq 'Restricted' -or $policy -eq 'AllSigned') {
     if (-not $Force) {
@@ -98,7 +98,7 @@ if ($policy -eq 'Restricted' -or $policy -eq 'AllSigned') {
     }
 }
 
-Write-Section "Step 2/6: Verifying Python"
+Write-Section "Step 2/5: Verifying Python"
 $python = $null
 foreach ($cand in @('python', 'python3', 'py')) {
     if (Get-Command $cand -ErrorAction SilentlyContinue) {
@@ -120,7 +120,7 @@ if ($pyMajor -lt 3 -or ($pyMajor -eq 3 -and $pyMinor -lt 11)) {
     Write-Fail "Python 3.11+ required, found $pyVersionOutput"
 }
 
-Write-Section "Step 3/6: Installing uv"
+Write-Section "Step 3/5: Installing uv"
 if (Get-Command uv -ErrorAction SilentlyContinue) {
     $uvVersion = uv --version
     if ($LASTEXITCODE -ne 0) {
@@ -144,7 +144,7 @@ if (Get-Command uv -ErrorAction SilentlyContinue) {
     Write-Info "uv installed: $(uv --version)"
 }
 
-Write-Section "Step 4/6: Syncing workspace dependencies"
+Write-Section "Step 4/5: Syncing workspace dependencies"
 Repair-IncompleteVenv
 $syncResult = Invoke-NativeCapture -FilePath 'uv' -Arguments @('sync', '--locked')
 if ($syncResult.ExitCode -ne 0) {
@@ -152,34 +152,28 @@ if ($syncResult.ExitCode -ne 0) {
 }
 Write-Info "Workspace dependencies installed"
 
-Write-Section "Step 5/6: Installing Playwright Chromium"
-$chromiumOk = $false
-$crawlSetup = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'crawl4ai-setup')
-if ($crawlSetup.ExitCode -eq 0) {
-    $chromiumOk = $true
-} else {
-    Write-Warn "crawl4ai-setup encountered an issue; falling back to playwright install chromium"
-    $playwrightInstall = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', '-m', 'playwright', 'install', 'chromium')
-    if ($playwrightInstall.ExitCode -eq 0) {
-        $chromiumOk = $true
+Write-Section "Step 5/5: Verifying workspace runtime"
+$probeResult = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', 'scripts/runtime_probe.py')
+if ($probeResult.ExitCode -ne 0) {
+    if ($probeResult.Output -match '"error": "missing_browser"') {
+        Write-Info "Chromium is missing; installing it for this standalone workspace"
+        $playwrightInstall = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', '-m', 'playwright', 'install', 'chromium')
+        if ($playwrightInstall.ExitCode -ne 0) {
+            Write-Fail "Chromium install failed (rc=$($playwrightInstall.ExitCode)): $($playwrightInstall.Output)"
+        }
+        $probeResult = Invoke-NativeCapture -FilePath 'uv' -Arguments @('run', 'python', 'scripts/runtime_probe.py')
+        if ($probeResult.ExitCode -ne 0) {
+            Write-Fail "Workspace runtime probe still failed after browser install (rc=$($probeResult.ExitCode)): $($probeResult.Output)"
+        }
     } else {
-        Write-Warn "Playwright Chromium install failed. Web scraping will not work until fixed."
-        Write-Warn "See https://playwright.dev/python/docs/intro for manual install."
+        Write-Fail "Workspace runtime probe failed (rc=$($probeResult.ExitCode)): $($probeResult.Output)"
     }
-}
-
-Write-Section "Step 6/6: Verifying workspace runtime"
-$verifyResult = Invoke-UvPythonCode -Code "import crawl4ai, ddgs, arxiv, yaml; print('ok')"
-if ($verifyResult.ExitCode -ne 0) {
-    Write-Fail "Verification import failed: $($verifyResult.Output)"
-}
-Write-Info "All required packages importable: $($verifyResult.Output)"
-if (-not $chromiumOk) {
-    Write-Fail "Chromium was not installed successfully. Web scraping is the default mode; without Chromium, search_web.py will not be able to fetch pages. Re-run with explicit: uv run python -m playwright install chromium"
 }
 
 Write-Section "Workspace ready"
 Write-Info "Next steps:"
+Write-Info "  If this workspace lives under the creating toolkit root, you can reopen it with calixto open from there."
+Write-Info "  If it was copied elsewhere, this local .venv is now the supported runtime."
 Write-Info "  update config.json with your research question"
 Write-Info "  uv run python scripts\search_web.py 'your query' --workspace ."
 Write-Info "  uv run python scripts\workspace_info.py audit ."

@@ -103,6 +103,8 @@ Fresh install:
 - writes `.calixto-toolkit-install.json` after validation so later workspace
   creation can identify the installed toolkit snapshot even when the installed
   root is not itself a git repo
+- prepares the current managed workspace runtime unless dependency setup was
+  explicitly skipped or declined
 - writes `.calixto-managed-entries` only after the copied toolkit validates
   successfully
 - rejects downloaded `workspaces/`, `notes/`, `outputs/`, and root `*.local`
@@ -167,6 +169,25 @@ It records:
 
 `init_workspace.py` uses this file to stamp workspace metadata and to run the
 pre-create toolkit update check in installed non-git toolkit roots.
+
+## Managed Runtime Preparation
+
+Toolkit setup now prepares a toolkit-local managed runtime under `.calixto/`
+from `runtime/workspace/pyproject.toml` and `runtime/workspace/uv.lock`.
+
+Rules:
+
+- managed runtimes are toolkit-local state, not version-controlled source
+- the current runtime key is prepared eagerly on successful setup when
+  dependency setup is enabled
+- browser installation is probe-driven and idempotent; setup installs Chromium
+  only when the runtime probe shows it is missing
+- older runtime keys are retained so older managed workspaces can keep using
+  their exact compatible runtime after toolkit updates
+
+If install or update is run with dependency setup skipped, the next
+`calixto research` or `calixto open` invocation prepares the needed runtime
+lazily instead of claiming that the toolkit is already ready.
 
 ## Transactional Updates
 
