@@ -1,0 +1,4 @@
+interface:
+  display_name: "Research Retrospective"
+  short_description: "Audit completed research and derive Calixto improvements"
+  default_prompt: "Use $research-retrospective to audit a completed workspace, create a report-derived questionnaire for the original research agent, and synthesize the returned answers into actionable Calixto improvements."

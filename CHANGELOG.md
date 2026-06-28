@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-06-21
+
+- Added the toolkit-only `research-retrospective` meta-skill for independent
+  adversarial workspace review, a report-derived non-leading questionnaire for
+  the original research agent, and synthesis of the returned answers into
+  concrete Calixto improvements. The user mediates the cross-session file
+  handoff, and the skill remains outside the standalone workspace runtime
+  bundle.
+
 ## 2026-06-20
 
 - Added the top-level `calixto` CLI with `research`, `open`, and `runtime` commands so the default workflow is one command instead of manual `init_workspace.py` + `cd` + workspace-local setup.

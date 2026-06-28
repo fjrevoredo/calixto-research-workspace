@@ -31,8 +31,12 @@ This project is designed to be understood, modified, extended, and maintained by
 3. **`skills/`**: Workflow instructions that teach agents how to use the tools.
 4. **`skills/create-skill.md`**: Meta-skill teaching agents how to create new skills.
 5. **`skills/integrate-tool.md`**: Meta-skill teaching agents how to add new providers and tools.
-6. **`tests/golden/README.md`**: How to run and extend the golden dataset.
-7. **Architecture Decision Records (ADRs)**: In `docs/adr/` when we make significant design choices.
+6. **`skills/research-retrospective/`**: Maintainer meta-skill for adversarially
+   reviewing completed research, collecting a user-mediated self-assessment
+   from the original research agent, and deriving evidence-backed toolkit
+   improvements.
+7. **`tests/golden/README.md`**: How to run and extend the golden dataset.
+8. **Architecture Decision Records (ADRs)**: In `docs/adr/` when we make significant design choices.
 
 **When considering a new feature, ask:**
 - Can an agent implement this by reading the existing documentation?
@@ -334,6 +338,8 @@ This project is designed so that any coding agent can understand, use, extend, a
    - `literature-review.md`: Academic variant
    - `create-skill.md`: Meta-skill: how to create new skills
    - `integrate-tool.md`: Meta-skill: how to add new providers
+   - `research-retrospective/`: Meta-skill: how to audit completed research,
+     question the original research agent, and synthesize toolkit improvements
 
 4. **Architecture Decision Records** (`docs/adr/`): When we make significant design choices:
    - Why we chose Crawl4AI over other scrapers

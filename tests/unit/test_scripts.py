@@ -186,6 +186,7 @@ class TestInitWorkspace:
             "PHILOSOPHY.md",
             "skills/create-skill",
             "skills/integrate-tool",
+            "skills/research-retrospective",
             "scripts/init_workspace.py",
             "scripts/installer_core.py",
             "scripts/toolkit_git.py",

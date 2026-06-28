@@ -75,7 +75,8 @@ Load the full toolkit context:
 - `PHILOSOPHY.md`
 - `requirements.md`
 - provider implementations in `providers/`
-- toolkit-side skills, especially `skills/create-skill/` and `skills/integrate-tool/`
+- toolkit-side skills, especially `skills/create-skill/`,
+  `skills/integrate-tool/`, and `skills/research-retrospective/`
 - ADRs in `docs/adr/`
 - tests and golden dataset tooling under `tests/`
 - runtime bundle sources under `runtime/`

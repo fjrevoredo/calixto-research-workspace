@@ -448,6 +448,26 @@ Instructions for adding new tools/providers:
 - Script conventions and interfaces
 - How to update skills to use new tools
 
+### 6.5 `research-retrospective`: Maintainer Meta-Skill
+
+Developer-mode workflow for evaluating completed research and improving the
+toolkit:
+
+- Produce an independent adversarial review of a completed workspace.
+- Convert the adversarial findings into a case-specific but non-leading
+  questionnaire for the original research agent.
+- Pause while the user transfers the questionnaire to the original research
+  session and returns that agent's answers.
+- Preserve the questionnaire answers verbatim.
+- Triangulate workspace evidence, Agent B findings, and Agent A feedback into
+  prioritized, testable improvements.
+- Consider fixes, missing features, removals, simplifications, process changes,
+  scaffold changes, runtime/setup issues, and documentation/test gaps.
+
+This skill is toolkit-root only. It is not included in
+`runtime/workspace-manifest.json` and must not be copied into standalone
+research workspaces.
+
 ---
 
 ## 7. Traceability

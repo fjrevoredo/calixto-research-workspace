@@ -183,6 +183,11 @@ running the workspace-local setup script there.
 
 This repository also contains the maintainer-side source:
 
+- developer meta-skills under `skills/`, including
+  `research-retrospective` for adversarial workspace review, a user-mediated
+  questionnaire answered by the original research agent, and evidence-backed
+  improvement recommendations
+
 - root `AGENTS.md`
 - `PHILOSOPHY.md`
 - `requirements.md`
