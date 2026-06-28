@@ -22,6 +22,7 @@ Cursor should be pointed at the directory that matches the job:
 3. In Cursor, load the workspace-local:
 
    - `AGENTS.md`
+   - `skills/research-preparation/SKILL.md` for new or underspecified topics
    - `skills/deep-research/SKILL.md`
    - or `skills/literature-review/SKILL.md`
 

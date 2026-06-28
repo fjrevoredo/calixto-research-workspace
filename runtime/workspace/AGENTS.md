@@ -44,7 +44,9 @@ installs Playwright Chromium only when the browser probe shows it is missing.
 
 ## How To Work
 
-1. Read `skills/deep-research/SKILL.md` for general research or
+1. Read `skills/research-preparation/SKILL.md` first when the topic is new,
+   raw, underspecified, high-stakes, or missing a clear output shape. Then use
+   `skills/deep-research/SKILL.md` for general research or
    `skills/literature-review/SKILL.md` for paper-heavy work.
    These canonical skills are always present in this workspace. Some harnesses
    may also discover generated mirrors under `.agents/skills/` or
@@ -52,8 +54,10 @@ installs Playwright Chromium only when the browser probe shows it is missing.
    toolkit root prepares mirrors for an existing workspace, missing mirrors are
    created and divergent existing mirrors are preserved by default; use the
    toolkit's explicit force-refresh option if you want to overwrite a mirror.
-2. Set or refine the question in `config.json`.
-3. Run workspace-local scripts from this directory.
+2. Treat `notes/research-brief.md` as the operating contract for source
+   gathering and final report shape when it is present and populated.
+3. Set or refine the question in `config.json`.
+4. Run workspace-local scripts from this directory.
 
 Search discipline matters:
 
@@ -68,6 +72,8 @@ Search discipline matters:
   `workspace_info.py review-source . <src_NNN> <pending|discarded|used>`.
 - Record open questions in `notes/gaps.md` and populate `outputs/bibliography.md`
   before handoff.
+- For a new topic, aim for question -> triage -> brief -> deep research or
+  literature review, not immediate searching from a vague prompt.
 
 Recommended command style:
 

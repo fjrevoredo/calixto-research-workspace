@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-06-28
+
+- Added the research-mode `research-preparation` skill at both the toolkit handoff layer and the bundled standalone workspace runtime so agents can normalize raw questions before source gathering.
+- Added the durable `notes/research-brief.md` workspace template and updated bundled research guidance so question triage, assumptions, evidence planning, and downstream handoff are recorded before deep research or literature review begins.
+- Updated future workspace bundling, harness guidance, and downstream skills so `deep-research` and `literature-review` consume the brief when present, without rewriting existing generated workspaces in place.
+
 ## 2026-06-21
 
 - Added the toolkit-only `research-retrospective` meta-skill for independent

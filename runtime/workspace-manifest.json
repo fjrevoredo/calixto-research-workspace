@@ -55,6 +55,11 @@
     },
     {
       "kind": "directory",
+      "source": "runtime/workspace/skills/research-preparation",
+      "destination": "skills/research-preparation"
+    },
+    {
+      "kind": "directory",
       "source": "providers",
       "destination": "providers"
     },

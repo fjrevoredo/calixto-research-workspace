@@ -27,7 +27,7 @@ We are **not** building an app. We are building **infrastructure**: the skills, 
 
 | Layer | What we build | Notes |
 |---|---|---|
-| **Skills** | Markdown instruction files for agents | Deep research, literature review, meta-skills |
+| **Skills** | Markdown instruction files for agents | Research preparation, deep research, literature review, meta-skills |
 | **Scripts** | Python CLI helpers | Top-level research/open/runtime orchestration plus lower-level search and workspace helpers |
 | **Providers** | Pluggable search and scrape backends | DuckDuckGo (default), Brave, Tavily, Crawl4AI |
 | **Templates** | Workspace folder structure conventions | Copied on workspace creation |
@@ -59,14 +59,18 @@ research-workspace/
 ├── setup.ps1                     # One-shot env setup (PowerShell for Windows)
 │
 ├── skills/
+│   ├── research-preparation/
+│   │   └── SKILL.md              # Toolkit-side question triage and workspace handoff
 │   ├── deep-research/
 │   │   └── SKILL.md              # Toolkit-side handoff into a standalone workspace
 │   ├── literature-review/
 │   │   └── SKILL.md              # Toolkit-side handoff into a standalone workspace
 │   ├── create-skill/
 │   │   └── SKILL.md              # Meta: how to add new skills
-│   └── integrate-tool/
-│       └── SKILL.md              # Meta: how to add new tools/providers
+│   ├── integrate-tool/
+│   │   └── SKILL.md              # Meta: how to add new tools/providers
+│   └── research-retrospective/
+│       └── SKILL.md              # Toolkit-only maintainer meta-skill
 │
 ├── adapters/
 │   ├── claude-code/              # Claude Code skill installation
@@ -141,6 +145,8 @@ workspaces/
     ├── pyproject.toml            # Workspace dependency manifest
     ├── setup.sh / setup.ps1      # Workspace-local bootstrap
     ├── skills/
+    │   ├── research-preparation/
+    │   │   └── SKILL.md
     │   ├── deep-research/
     │   │   └── SKILL.md
     │   └── literature-review/
@@ -166,6 +172,7 @@ workspaces/
     │   └── code/
     │       └── ...
     ├── notes/
+    │   ├── research-brief.md     # Question triage, assumptions, scope, handoff
     │   ├── findings.md           # Extracted facts with IDs (fnd_NNN)
     │   ├── summary.md            # Agent's synthesis with insight IDs (ins_NNN)
     │   └── gaps.md               # Identified gaps / follow-up questions
@@ -409,11 +416,25 @@ See `skills/integrate-tool.md` for instructions on:
 
 ## 6. Skills
 
-### 6.1 `deep-research.md`: General Deep Research Workflow
+### 6.1 `research-preparation`: Question Triage And Brief Creation
+
+The preparation skill runs before source gathering when the user's topic needs
+normalization. It teaches the agent to:
+
+1. Triage the raw question for clarity, scope, domain, stakes, time sensitivity, source needs, and report shape
+2. Decide whether to proceed directly, ask targeted clarification, or proceed with explicit assumptions
+3. Write a durable `notes/research-brief.md`
+4. Keep `config.json.question` as the concise refined question
+5. Hand off into `deep-research` or `literature-review`
+
+This skill is bundled into standalone workspaces and is also available as a
+toolkit-root handoff skill for starting a new workspace cleanly.
+
+### 6.2 `deep-research.md`: General Deep Research Workflow
 
 The main skill. Teaches any agent how to perform research from start to finish:
 
-1. **Initialize**: Create workspace, define research question and scope
+1. **Initialize**: Confirm the prepared brief or refine the question and scope first
 2. **Search**: Run web/paper searches with the right scholarly provider, collect sources (scripts assign src_NNN IDs)
 3. **Evaluate**: Assess source quality, identify gaps
 4. **Extract**: Agent reads sources and extracts key facts, assigning fnd_NNN IDs and referencing source IDs
@@ -427,11 +448,11 @@ Must work for any topic: consumer advice, technical research, academic literatur
 
 **Traceability requirement**: The skill explicitly instructs the agent to maintain the full provenance chain (src > fnd > ins > report) by assigning and referencing IDs at each step.
 
-### 6.2 `literature-review.md`: Academic Variant
+### 6.3 `literature-review.md`: Academic Variant
 
 Focused on academic research: domain-aware scholarly-provider selection, citation tracking, methodology assessment, and structured literature review format. arXiv stays primary for CS/math/physics; PubMed is preferred for biomedical and clinical questions.
 
-### 6.3 `create-skill.md`: Meta-Skill
+### 6.4 `create-skill.md`: Meta-Skill
 
 Instructions for creating new research skills:
 - Skill file format and conventions
@@ -439,7 +460,7 @@ Instructions for creating new research skills:
 - How to define workflow stages
 - Examples of good skill structure
 
-### 6.4 `integrate-tool.md`
+### 6.5 `integrate-tool.md`
 
 Instructions for adding new tools/providers:
 - How to add a new search provider (implement the interface)
@@ -448,7 +469,7 @@ Instructions for adding new tools/providers:
 - Script conventions and interfaces
 - How to update skills to use new tools
 
-### 6.5 `research-retrospective`: Maintainer Meta-Skill
+### 6.6 `research-retrospective`: Maintainer Meta-Skill
 
 Developer-mode workflow for evaluating completed research and improving the
 toolkit:
@@ -521,7 +542,7 @@ The agent or a future script can verify:
 ### 8.1 Research Mode (Default)
 
 The agent is performing research inside a workspace. It loads only:
-- The active skill (e.g., `deep-research.md`)
+- The active skill (e.g., `research-preparation` or `deep-research`)
 - Script usage (help text, arguments)
 - Workspace structure and conventions
 
@@ -738,6 +759,9 @@ workspace snapshot when toolkit provenance is available.
 `toolkit_build_number_created_with` is the git commit-count build number for
 that snapshot when full history is available, and
 `toolkit_ref_created_with` records the local symbolic ref when available.
+`question` stores the concise refined research question; the fuller
+normalization record belongs in `notes/research-brief.md`, including the raw
+question, assumptions, scope, evidence plan, and handoff notes.
 
 ### 11.3 Deduplication Registry (`sources/index.json`)
 
@@ -1082,6 +1106,7 @@ Agent can commit workspace to git for archival. All files are text, so git works
 - [ ] `search_web.py` working (search, scrape, save with ID assignment)
 - [ ] Source deduplication via `sources/index.json`
 - [ ] Sources saved as markdown with frontmatter including ID
+- [ ] `research-preparation` skill and `notes/research-brief.md` template
 - [ ] Basic `deep-research.md` skill (with traceability instructions)
 
 ### M2: Analyze + report
@@ -1100,6 +1125,7 @@ Agent can commit workspace to git for archival. All files are text, so git works
 - [ ] Results documented
 
 ### M4: Extensibility
+- [ ] `research-preparation` workflow documented and bundled
 - [ ] `create-skill.md` meta-skill
 - [ ] `integrate-tool.md` meta-skill
 - [ ] `literature-review.md` variant skill

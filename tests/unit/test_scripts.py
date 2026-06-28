@@ -99,7 +99,9 @@ class TestInitWorkspace:
         assert workspace.joinpath("scripts", "search_web.py").exists()
         assert workspace.joinpath("scripts", "search_pubmed.py").exists()
         assert workspace.joinpath("providers", "search", "duckduckgo.py").exists()
+        assert workspace.joinpath("notes", "research-brief.md").exists()
         assert workspace.joinpath("skills", "deep-research", "SKILL.md").exists()
+        assert workspace.joinpath("skills", "research-preparation", "SKILL.md").exists()
         assert out["workspace_layout"] == "standalone"
         assert Path(out["runtime_manifest"]).name == "workspace-manifest.json"
         assert "toolkit_commit_created_with" in out
@@ -195,7 +197,8 @@ class TestInitWorkspace:
 
         workspace_agents = workspace.joinpath("AGENTS.md").read_text(encoding="utf-8")
         assert "parent toolkit checkout" in workspace_agents.lower()
-        for skill_name in ("deep-research", "literature-review"):
+        assert workspace.joinpath("notes", "research-brief.md").exists()
+        for skill_name in ("deep-research", "literature-review", "research-preparation"):
             skill_text = workspace.joinpath("skills", skill_name, "SKILL.md").read_text(encoding="utf-8")
             assert "repo root" not in skill_text.lower()
             assert "workspaces/<slug>" not in skill_text

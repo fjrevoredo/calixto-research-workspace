@@ -74,6 +74,11 @@ Then start new research with one command:
 calixto research "best methods to combat mosquitoes" --agent none
 ```
 
+For new or underspecified topics, the agent should normally begin with
+workspace-local `skills/research-preparation/SKILL.md`, which may clarify the
+question, write `notes/research-brief.md`, and only then hand off to
+`deep-research` or `literature-review` for source gathering.
+
 The launcher resolves the active toolkit root from your current directory.
 Run it from inside a Calixto toolkit root or set `CALIXTO_TOOLKIT_ROOT`.
 If the launcher directory is not on `PATH`, or you want an explicit one-off
@@ -91,6 +96,8 @@ snapshot, stores the exact question in `config.json`, prepares harness-native
 skill mirrors when requested, preserves divergent existing mirrors unless you
 pass `--force-harness-mirrors`, and reuses the pre-provisioned managed runtime
 instead of creating a per-workspace `.venv`.
+The agent may refine the question and record the broader operating contract in
+`notes/research-brief.md` before it starts collecting sources.
 
 ## Automation And JSON
 

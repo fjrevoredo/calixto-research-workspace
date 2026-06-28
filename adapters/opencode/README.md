@@ -24,6 +24,9 @@ Use OpenCode at the correct boundary:
    the standalone workspace. Regenerating mirrors later preserves divergent
    existing mirror content by default; use the toolkit's force-refresh option
    only when you explicitly want to overwrite a mirror.
+   For new or underspecified topics, start with
+   `skills/research-preparation/SKILL.md` before `deep-research` or
+   `literature-review`.
 
 Use commands from the workspace root, for example:
 

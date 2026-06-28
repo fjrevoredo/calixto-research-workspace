@@ -127,10 +127,11 @@ class TestHarnessMirrorGeneration:
 
         created = calixto._create_workspace(args)
         workspace = Path(created["workspace"])
-        assert (workspace / ".agents" / "skills" / "deep-research" / "SKILL.md").exists()
-        canonical = (workspace / "skills" / "deep-research" / "SKILL.md").read_text(encoding="utf-8")
-        mirrored = (workspace / ".agents" / "skills" / "deep-research" / "SKILL.md").read_text(encoding="utf-8")
-        assert mirrored == canonical
+        for skill_name in ("deep-research", "literature-review", "research-preparation"):
+            assert (workspace / ".agents" / "skills" / skill_name / "SKILL.md").exists()
+            canonical = (workspace / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
+            mirrored = (workspace / ".agents" / "skills" / skill_name / "SKILL.md").read_text(encoding="utf-8")
+            assert mirrored == canonical
 
     def test_existing_mirror_is_preserved_by_default(self, tmp_path: Path) -> None:
         import init_workspace
@@ -148,6 +149,7 @@ class TestHarnessMirrorGeneration:
 
         assert str(mirror_dir) in report["preserved"]
         assert marker.exists()
+        assert str(workspace / ".agents" / "skills" / "research-preparation") in report["created"]
 
     def test_existing_mirror_can_be_replaced_with_force(self, tmp_path: Path) -> None:
         import init_workspace
@@ -166,6 +168,7 @@ class TestHarnessMirrorGeneration:
         assert str(mirror_dir) in report["replaced"]
         assert not marker.exists()
         assert (mirror_dir / "SKILL.md").read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+        assert str(workspace / ".agents" / "skills" / "research-preparation") in report["created"]
 
     def test_open_prepare_harness_generates_claude_mirror(self, tmp_path: Path, monkeypatch) -> None:
         import init_workspace
@@ -201,7 +204,8 @@ class TestHarnessMirrorGeneration:
             ]
         )
         assert rc == 0
-        assert (workspace / ".claude" / "skills" / "deep-research" / "SKILL.md").exists()
+        for skill_name in ("deep-research", "literature-review", "research-preparation"):
+            assert (workspace / ".claude" / "skills" / skill_name / "SKILL.md").exists()
 
     def test_open_json_emits_structured_payload(self, tmp_path: Path, monkeypatch, capsys) -> None:
         import init_workspace

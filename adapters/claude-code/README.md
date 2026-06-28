@@ -22,6 +22,7 @@ Use Claude Code in two different places depending on the task:
 3. Inside Claude Code, read the workspace-local files:
 
    - `AGENTS.md`
+   - `skills/research-preparation/SKILL.md` for new or underspecified topics
    - `skills/deep-research/SKILL.md`
    - or `skills/literature-review/SKILL.md`
 

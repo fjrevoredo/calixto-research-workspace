@@ -24,6 +24,9 @@ Use Codex at the directory boundary that matches the task:
    regenerate mirrors later, divergent existing mirrors are preserved by
    default; use the toolkit's force-refresh option only when you explicitly
    want to overwrite them.
+   For new or underspecified topics, start with
+   `skills/research-preparation/SKILL.md` before `deep-research` or
+   `literature-review`.
 
 ## Developer Workflow
 

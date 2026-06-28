@@ -42,7 +42,15 @@ Use `uv run python ...` if you set up the workspace with `uv`.
 
 ## Workflow
 
-### Step 1: Confirm the workspace question
+### Step 1: Confirm the workspace question and brief
+
+Read `notes/research-brief.md` first when it is present and populated.
+Use it as the operating contract for scope, intended output, evidence plan,
+and obvious uncertainty.
+
+If the topic is still raw, ambiguous, high-stakes, or missing a brief, run
+`skills/research-preparation/SKILL.md` before you search unless the user has
+already provided a clearly scoped question and you can proceed safely.
 
 Set or refine the research question in `config.json` before you search.
 
@@ -57,6 +65,9 @@ Check the current workspace state:
 ```bash
 uv run python scripts/workspace_info.py show .
 ```
+
+Continue to source gathering only after the question and any needed brief are
+consistent with each other.
 
 ### Step 2: Search for sources
 

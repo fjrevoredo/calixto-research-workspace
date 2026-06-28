@@ -38,7 +38,16 @@ Run the bundled scripts from this workspace root:
 
 ## Workflow
 
-### Step 1: Set the question
+### Step 1: Confirm the question and brief
+
+Read `notes/research-brief.md` first when it is present and populated.
+Use it to confirm academic scope, evidence standard, likely scholarly
+providers, and expected review structure.
+
+If the topic is still raw, ambiguous, or unclear about corpus type, review
+shape, or stakes, run `skills/research-preparation/SKILL.md` before scholarly
+search unless the user already supplied a clearly scoped literature-review
+question.
 
 Update `config.json` with the research question:
 
@@ -47,6 +56,9 @@ Update `config.json` with the research question:
   "question": "What are the state-of-the-art methods for X, and what are their limitations?"
 }
 ```
+
+Continue only after the brief and `config.json.question` agree on the intended
+review.
 
 ### Step 2: Choose the right scholarly provider first
 
