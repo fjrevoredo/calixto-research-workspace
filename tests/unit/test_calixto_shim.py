@@ -57,3 +57,15 @@ class TestCalixtoShim:
             assert str(toolkit_root) not in content
         assert "CALIXTO_TOOLKIT_ROOT" in posix
         assert "CALIXTO_TOOLKIT_ROOT" in windows_ps1
+
+    def test_windows_launcher_walks_parent_with_runtime_api(self) -> None:
+        windows_ps1 = install_calixto_shim.windows_ps1_contents()
+
+        assert "Split-Path -LiteralPath $dir -Parent" not in windows_ps1
+        assert "[System.IO.Directory]::GetParent($dir)" in windows_ps1
+
+    def test_windows_cmd_selects_shell_before_running_launcher(self) -> None:
+        windows_cmd = install_calixto_shim.windows_cmd_contents()
+
+        assert "where pwsh >nul 2>nul" in windows_cmd
+        assert "if errorlevel 1 powershell" not in windows_cmd
